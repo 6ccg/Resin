@@ -2324,7 +2324,7 @@ GeoIP 与订阅的下载都有错误重试的需求。
 
 核心设置：
 * `RESIN_MAX_LATENCY_TABLE_ENTRIES`：每个节点延迟表中“普通站点 LRU 区”的最大表项数。默认 12，最大 32（超限启动失败）。
-* `RESIN_PROBE_CONCURRENCY`：节点探测的最大并发数量。默认 1000，最大 10000（超限启动失败）。
+* 探测并发已迁移到运行时系统设置 `probe_concurrency`，默认 32，范围 1–256。
 * `RESIN_GEOIP_UPDATE_SCHEDULE`：GeoIP 数据库自动更新的 Cron 表达式。默认 "0 7 * * *"。
 * `RESIN_DEFAULT_PLATFORM_STICKY_TTL`：默认平台粘性会话时长。默认 "168h"。
 * `RESIN_DEFAULT_PLATFORM_REGEX_FILTERS`：默认平台节点标签过滤规则（JSON 字符串数组）。默认 `[]`。
@@ -2333,7 +2333,7 @@ GeoIP 与订阅的下载都有错误重试的需求。
 * `RESIN_DEFAULT_PLATFORM_REVERSE_PROXY_EMPTY_ACCOUNT_BEHAVIOR`：默认平台在反代 Account 为空时的行为。枚举：`RANDOM|FIXED_HEADER|ACCOUNT_HEADER_RULE`。默认 `ACCOUNT_HEADER_RULE`。
 * `RESIN_DEFAULT_PLATFORM_REVERSE_PROXY_FIXED_ACCOUNT_HEADER`：默认平台固定提取 Header 列表（多行，每行一个 Header）。仅当上项为 `FIXED_HEADER` 时必须至少提供一个合法 Header。默认 `Authorization`。
 * `RESIN_DEFAULT_PLATFORM_ALLOCATION_POLICY`：默认平台分配策略。枚举：`BALANCED|PREFER_LOW_LATENCY|PREFER_IDLE_IP`。默认 `BALANCED`。
-* `RESIN_PROBE_TIMEOUT`：单次探测请求超时。默认 "15s"。
+* 探测超时已迁移到运行时系统设置 `probe_timeout`，默认 "15s"。
 * `RESIN_RESOURCE_FETCH_TIMEOUT`：资源下载（订阅/GeoIP）单次尝试超时。默认 "30s"。
 * `RESIN_NODE_DNS_UPSTREAMS`：Resin 托管节点域名解析上游，JSON 字符串数组。默认值为 `["https://doh.pub/dns-query","https://dns.alidns.com/dns-query","tls://223.5.5.5?sni=dns.alidns.com","local"]`；设置后完全按数组顺序作为 failover 链。仅作用于内部 sing-box builder 解析节点域名，不影响订阅下载、GeoIP 下载等其他资源下载路径。
   * 支持：`local`、`udp://host[:port]`、`tcp://host[:port]`、`tls://host[:port]?sni=name`、`quic://host[:port]?sni=name`、`https://host[:port][/path]?sni=name&bootstrap=local`、`h3://host[:port][/path]?sni=name&bootstrap=local`。

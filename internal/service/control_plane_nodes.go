@@ -15,15 +15,24 @@ import (
 
 // NodeFilters holds query filters for listing nodes.
 type NodeFilters struct {
-	PlatformID     *string
-	SubscriptionID *string
-	Enabled        *bool
-	Region         *string
-	CircuitOpen    *bool
-	HasOutbound    *bool
-	EgressIP       *string
-	ProbedSince    *time.Time
-	TagKeyword     *string
+	PlatformID     *string    `json:"platform_id,omitempty"`
+	SubscriptionID *string    `json:"subscription_id,omitempty"`
+	Enabled        *bool      `json:"enabled,omitempty"`
+	Region         *string    `json:"region,omitempty"`
+	CircuitOpen    *bool      `json:"circuit_open,omitempty"`
+	HasOutbound    *bool      `json:"has_outbound,omitempty"`
+	EgressIP       *string    `json:"egress_ip,omitempty"`
+	ProbedSince    *time.Time `json:"probed_since,omitempty"`
+	TagKeyword     *string    `json:"tag_keyword,omitempty"`
+	EntryKeyword   *string    `json:"entry_keyword,omitempty"`
+	NetworkTypes   []string   `json:"network_types,omitempty"`
+	ExcludeRegions []string   `json:"exclude_regions,omitempty"`
+	Hosting        *bool      `json:"hosting,omitempty"`
+	HostingUnknown bool       `json:"hosting_unknown,omitempty"`
+	CompanyKeyword *string    `json:"company_keyword,omitempty"`
+	ASNKeyword     *string    `json:"asn_keyword,omitempty"`
+	Validity       string     `json:"validity,omitempty"`
+	NodeHashes     []string   `json:"node_hashes,omitempty"`
 }
 
 // ListNodes returns nodes from the pool with optional filters.
@@ -123,6 +132,9 @@ func (s *ControlPlaneService) nodeEntryMatchesFilters(
 	filters NodeFilters,
 	subLookup node.SubLookupFunc,
 ) bool {
+	if !s.nodeMatchesInspection(entry, filters) {
+		return false
+	}
 	// Enabled/disabled filter.
 	if filters.Enabled != nil {
 		enabled := true
@@ -168,11 +180,8 @@ func (s *ControlPlaneService) nodeEntryMatchesFilters(
 
 	// Region filter.
 	if filters.Region != nil {
-		region := entry.GetRegion(nil)
-		if s.GeoIP != nil {
-			region = entry.GetRegion(s.GeoIP.Lookup)
-		}
-		if region == "" || region != *filters.Region {
+		region := s.nodeRegion(entry)
+		if !matchesCSV(region, *filters.Region) {
 			return false
 		}
 	}
@@ -191,7 +200,7 @@ func (s *ControlPlaneService) nodeEntryMatchesFilters(
 	// Egress IP filter.
 	if filters.EgressIP != nil {
 		egressIP := entry.GetEgressIP()
-		if !egressIP.IsValid() || egressIP.String() != *filters.EgressIP {
+		if !egressIP.IsValid() || !matchesIPSearch(egressIP.String(), *filters.EgressIP) {
 			return false
 		}
 	}
@@ -233,10 +242,7 @@ func (s *ControlPlaneService) ProbeEgress(hashStr string) (*probe.EgressProbeRes
 	if err != nil {
 		return nil, internal("egress probe failed", err)
 	}
-	result.Region = entry.GetRegion(nil)
-	if s.GeoIP != nil {
-		result.Region = entry.GetRegion(s.GeoIP.Lookup)
-	}
+	result.Region = s.nodeRegion(entry)
 	return result, nil
 }
 

@@ -3,6 +3,10 @@ import type { EnvConfig, RuntimeConfig, RuntimeConfigPatch } from "./types";
 
 const path = "/api/v1/system/config";
 
+export function getAttributeProviders(): Promise<{ id: string; name: string; default_url: string }[]> {
+  return apiRequest("/api/v1/system/attribute-providers");
+}
+
 const DEFAULT_CONFIG: RuntimeConfig = {
   request_log_enabled: true,
   reverse_proxy_log_detail_enabled: false,
@@ -16,6 +20,20 @@ const DEFAULT_CONFIG: RuntimeConfig = {
   max_egress_test_interval: "",
   latency_test_url: "",
   latency_authorities: [],
+  reachability_targets: [],
+  probe_enabled: true,
+  probe_concurrency: 32,
+  probe_timeout: "15s",
+  keepalive_enabled: false,
+  keepalive_interval: "5m",
+  recovery_probe_interval: "1m",
+  recovery_probe_max_interval: "1h",
+  recovery_success_threshold: 1,
+  node_validity_ttl: "2h",
+  egress_attributes_enabled: true,
+  egress_attributes_provider: "check-host",
+  egress_attributes_url: "https://api.check-host.cc/myinfo",
+  egress_attributes_interval: "24h",
   p2c_latency_window: "",
   latency_decay_window: "",
   cache_flush_interval: "",
@@ -43,6 +61,19 @@ function normalizeRuntimeConfig(raw: Partial<RuntimeConfig> | null | undefined):
   }
 
   return {
+    probe_enabled: raw.probe_enabled ?? true,
+    probe_concurrency: asNumber(raw.probe_concurrency, 32),
+    probe_timeout: asString(raw.probe_timeout, "15s"),
+    keepalive_enabled: raw.keepalive_enabled ?? false,
+    keepalive_interval: asString(raw.keepalive_interval, "5m"),
+    recovery_probe_interval: asString(raw.recovery_probe_interval, "1m"),
+    recovery_probe_max_interval: asString(raw.recovery_probe_max_interval, "1h"),
+    recovery_success_threshold: asNumber(raw.recovery_success_threshold, 1),
+    node_validity_ttl: asString(raw.node_validity_ttl, "2h"),
+    egress_attributes_enabled: raw.egress_attributes_enabled ?? true,
+    egress_attributes_provider: asString(raw.egress_attributes_provider, "check-host"),
+    egress_attributes_url: asString(raw.egress_attributes_url, "https://api.check-host.cc/myinfo"),
+    egress_attributes_interval: asString(raw.egress_attributes_interval, "24h"),
     request_log_enabled: Boolean(raw.request_log_enabled),
     reverse_proxy_log_detail_enabled: Boolean(raw.reverse_proxy_log_detail_enabled),
     reverse_proxy_log_req_headers_max_bytes: asNumber(
@@ -69,6 +100,9 @@ function normalizeRuntimeConfig(raw: Partial<RuntimeConfig> | null | undefined):
     ),
     max_egress_test_interval: asString(raw.max_egress_test_interval, DEFAULT_CONFIG.max_egress_test_interval),
     latency_test_url: asString(raw.latency_test_url, DEFAULT_CONFIG.latency_test_url),
+    reachability_targets: Array.isArray(raw.reachability_targets)
+      ? raw.reachability_targets.filter((item): item is string => typeof item === "string")
+      : [],
     latency_authorities: Array.isArray(raw.latency_authorities)
       ? raw.latency_authorities.filter((item): item is string => typeof item === "string")
       : DEFAULT_CONFIG.latency_authorities,

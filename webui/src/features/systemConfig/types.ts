@@ -11,6 +11,20 @@ export type RuntimeConfig = {
   max_egress_test_interval: string;
   latency_test_url: string;
   latency_authorities: string[];
+  reachability_targets: string[];
+  probe_enabled: boolean;
+  probe_concurrency: number;
+  probe_timeout: string;
+  keepalive_enabled: boolean;
+  keepalive_interval: string;
+  recovery_probe_interval: string;
+  recovery_probe_max_interval: string;
+  recovery_success_threshold: number;
+  node_validity_ttl: string;
+  egress_attributes_enabled: boolean;
+  egress_attributes_provider: string;
+  egress_attributes_url: string;
+  egress_attributes_interval: string;
   p2c_latency_window: string;
   latency_decay_window: string;
   cache_flush_interval: string;
@@ -25,7 +39,6 @@ export type EnvConfig = {
   resin_port: number;
   api_max_body_bytes: number;
   max_latency_table_entries: number;
-  probe_concurrency: number;
   geoip_update_schedule: string;
   default_platform_sticky_ttl: string;
   default_platform_regex_filters: string[] | null;
@@ -34,7 +47,6 @@ export type EnvConfig = {
   default_platform_reverse_proxy_empty_account_behavior: string;
   default_platform_reverse_proxy_fixed_account_header: string;
   default_platform_allocation_policy: string;
-  probe_timeout: string;
   resource_fetch_timeout: string;
   node_dns_upstreams: string[] | null;
   proxy_transport_max_idle_conns: number;

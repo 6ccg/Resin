@@ -90,6 +90,8 @@ func TestCacheRepo_NodesDynamic_BulkUpsertAndLoad(t *testing.T) {
 			LastLatencyProbeAttemptNs:          700,
 			LastAuthorityLatencyProbeAttemptNs: 800,
 			LastEgressUpdateAttemptNs:          900,
+			ProbeHistoryJSON:                   `[{"kind":"latency","success":true}]`,
+			RecoverySuccessCount:               1,
 		},
 	}
 	if err := repo.BulkUpsertNodesDynamic(nodes); err != nil {
@@ -102,6 +104,12 @@ func TestCacheRepo_NodesDynamic_BulkUpsertAndLoad(t *testing.T) {
 	}
 	if len(loaded) != 1 || loaded[0].FailureCount != 3 {
 		t.Fatalf("unexpected: %+v", loaded)
+	}
+	if loaded[0].ProbeHistoryJSON != nodes[0].ProbeHistoryJSON {
+		t.Fatalf("probe history not persisted: %q", loaded[0].ProbeHistoryJSON)
+	}
+	if loaded[0].RecoverySuccessCount != 1 {
+		t.Fatal("recovery progress was not persisted")
 	}
 	if loaded[0].EgressRegion != "us" {
 		t.Fatalf("egress_region: got %q, want %q", loaded[0].EgressRegion, "us")

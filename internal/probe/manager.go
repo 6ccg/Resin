@@ -1,6 +1,7 @@
 package probe
 
 import (
+	"context"
 	"fmt"
 	"log"
 	"math/rand/v2"
@@ -9,6 +10,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/Resinat/Resin/internal/config"
 	"github.com/Resinat/Resin/internal/netutil"
 	"github.com/Resinat/Resin/internal/node"
 	"github.com/Resinat/Resin/internal/scanloop"
@@ -30,7 +32,11 @@ type ProbeConfig struct {
 	QueueCapacity int
 
 	// Fetcher executes HTTP via node hash. Injectable for testing.
-	Fetcher Fetcher
+	Fetcher             Fetcher
+	TargetFetcher       func(hash node.Hash, url string) (status int, err error)
+	ReachabilityTargets func() []string
+	RuntimeConfig       func() *config.RuntimeConfig
+	ResolveEntry        func(string) ([]string, error)
 
 	// Interval thresholds — closures for hot-reload from RuntimeConfig.
 	MaxEgressTestInterval           func() time.Duration
@@ -53,14 +59,25 @@ type ProbeConfig struct {
 // ProbeManager schedules and executes active probes against nodes in the pool.
 // It holds a direct reference to *topology.GlobalNodePool (no interface).
 type ProbeManager struct {
-	pool        *topology.GlobalNodePool
-	stopCh      chan struct{}
-	stopOnce    sync.Once
-	wg          sync.WaitGroup
-	fetcher     Fetcher
-	workerCount int
-	taskQueue   *probeTaskQueue
-	taskStates  *xsync.Map[probeTaskKey, *probeTaskState]
+	pool                *topology.GlobalNodePool
+	stopCh              chan struct{}
+	stopOnce            sync.Once
+	wg                  sync.WaitGroup
+	fetcher             Fetcher
+	targetFetcher       func(node.Hash, string) (int, error)
+	reachabilityTargets func() []string
+	runtimeConfig       func() *config.RuntimeConfig
+	resolveEntry        func(string) ([]string, error)
+	slotMu              sync.Mutex
+	slotsActive         int
+	slotChanged         chan struct{}
+	lifecycleMu         sync.Mutex
+	stopped             bool
+	jobMu               sync.Mutex
+	job                 *probeJob
+	workerCount         int
+	taskQueue           *probeTaskQueue
+	taskStates          *xsync.Map[probeTaskKey, *probeTaskState]
 
 	maxEgressTestInterval           func() time.Duration
 	maxLatencyTestInterval          func() time.Duration
@@ -89,6 +106,8 @@ type probeTaskKind uint8
 const (
 	probeTaskKindEgress probeTaskKind = iota
 	probeTaskKindLatency
+	probeTaskKindTarget
+	probeTaskKindAttributes
 )
 
 type probeTaskKey struct {
@@ -261,6 +280,11 @@ func NewProbeManager(cfg ProbeConfig) *ProbeManager {
 		pool:                            cfg.Pool,
 		stopCh:                          make(chan struct{}),
 		fetcher:                         cfg.Fetcher,
+		targetFetcher:                   cfg.TargetFetcher,
+		reachabilityTargets:             cfg.ReachabilityTargets,
+		runtimeConfig:                   cfg.RuntimeConfig,
+		resolveEntry:                    cfg.ResolveEntry,
+		slotChanged:                     make(chan struct{}),
 		workerCount:                     conc,
 		taskQueue:                       newProbeTaskQueue(queueCap, queueCap, cfg.ChooseNormalWhenBoth),
 		taskStates:                      xsync.NewMap[probeTaskKey, *probeTaskState](),
@@ -283,7 +307,7 @@ func (m *ProbeManager) Start() {
 	m.wg.Add(1)
 	go func() {
 		defer m.wg.Done()
-		scanloop.Run(m.stopCh, scanloop.DefaultMinInterval, scanloop.DefaultJitterRange, m.scanEgress)
+		scanloop.Run(m.stopCh, scanloop.DefaultMinInterval, scanloop.DefaultJitterRange, func() { m.scanEgress(); m.scanAttributes() })
 	}()
 
 	m.wg.Add(1)
@@ -310,8 +334,11 @@ func (m *ProbeManager) Start() {
 //     state; expected ownership is that callers stop upstream event sources first.
 func (m *ProbeManager) Stop() {
 	m.stopOnce.Do(func() {
+		m.lifecycleMu.Lock()
+		m.stopped = true
 		close(m.stopCh)
 		m.taskQueue.StopDropPending()
+		m.lifecycleMu.Unlock()
 	})
 	m.wg.Wait()
 }
@@ -385,6 +412,7 @@ func (m *ProbeManager) ProbeEgressSync(hash node.Hash) (*EgressProbeResult, erro
 // LatencyProbeResult holds the results of a synchronous latency probe.
 type LatencyProbeResult struct {
 	LatencyEwmaMs float64 `json:"latency_ewma_ms"`
+	LatencyMs     float64 `json:"latency_ms"`
 }
 
 // ProbeLatencySync performs a blocking latency probe and returns the results.
@@ -414,7 +442,8 @@ func (m *ProbeManager) ProbeLatencySync(hash node.Hash) (*LatencyProbeResult, er
 		m.onProbeEvent("latency")
 	}
 
-	if err := m.performLatencyProbe(hash, testURL); err != nil {
+	latency, err := m.performLatencyProbe(hash, testURL)
+	if err != nil {
 		return nil, fmt.Errorf("latency probe failed: %w", err)
 	}
 
@@ -428,11 +457,15 @@ func (m *ProbeManager) ProbeLatencySync(hash node.Hash) (*LatencyProbeResult, er
 
 	return &LatencyProbeResult{
 		LatencyEwmaMs: ewmaMs,
+		LatencyMs:     float64(latency) / float64(time.Millisecond),
 	}, nil
 }
 
 // scanEgress iterates all pool nodes and probes those due for egress check.
 func (m *ProbeManager) scanEgress() {
+	if !m.settings().ProbeEnabled {
+		return
+	}
 	now := time.Now()
 	interval := 24 * time.Hour // default MaxEgressTestInterval
 	if m.maxEgressTestInterval != nil {
@@ -474,10 +507,17 @@ func (m *ProbeManager) scanEgress() {
 
 // scanLatency iterates all pool nodes and probes those due for latency check.
 func (m *ProbeManager) scanLatency() {
+	settings := m.settings()
+	if !settings.ProbeEnabled {
+		return
+	}
 	now := time.Now()
 	maxLatencyInterval := 1 * time.Hour // default
 	if m.maxLatencyTestInterval != nil {
 		maxLatencyInterval = m.maxLatencyTestInterval()
+	}
+	if settings.KeepaliveEnabled && time.Duration(settings.KeepaliveInterval) < maxLatencyInterval {
+		maxLatencyInterval = time.Duration(settings.KeepaliveInterval)
 	}
 	maxAuthorityInterval := 3 * time.Hour // default
 	if m.maxAuthorityLatencyTestInterval != nil {
@@ -505,7 +545,12 @@ func (m *ProbeManager) scanLatency() {
 			return true // skip nil outbound
 		}
 
-		if !m.isLatencyProbeDue(entry, now, maxLatencyInterval, maxAuthorityInterval, authorities, lookahead) {
+		if entry.IsCircuitOpen() {
+			last := entry.LastLatencyProbeAttempt.Load()
+			if last > 0 && now.Before(time.Unix(0, last).Add(m.recoveryInterval(entry))) {
+				return true
+			}
+		} else if !m.isLatencyProbeDue(entry, now, maxLatencyInterval, maxAuthorityInterval, authorities, lookahead) {
 			return true
 		}
 
@@ -527,7 +572,10 @@ func (m *ProbeManager) runProbeWorker() {
 			continue
 		}
 
-		m.executeTask(task)
+		if m.acquireSlot(context.Background()) {
+			m.executeTask(task)
+			m.releaseSlot()
+		}
 		m.finishTask(task.key, state)
 	}
 }
@@ -546,6 +594,24 @@ func (m *ProbeManager) executeTask(task probeTask) {
 		m.probeEgress(task.key.hash, entry)
 	case probeTaskKindLatency:
 		m.probeLatency(task.key.hash, entry, m.currentLatencyTestURL())
+		if m.reachabilityTargets != nil && len(m.reachabilityTargets()) > 0 {
+			m.TriggerTargetProbes(task.key.hash)
+		}
+	case probeTaskKindTarget:
+		if m.reachabilityTargets != nil {
+			for _, target := range m.reachabilityTargets() {
+				select {
+				case <-m.stopCh:
+					return
+				default:
+				}
+				if _, err := m.ProbeTargetSync(task.key.hash, target, nil); err != nil {
+					log.Printf("[probe] target check for %s: %v", task.key.hash.Hex(), err)
+				}
+			}
+		}
+	case probeTaskKindAttributes:
+		_, _ = m.ProbeAttributesSync(task.key.hash)
 	}
 }
 
@@ -775,15 +841,24 @@ func (m *ProbeManager) probeLatency(hash node.Hash, entry *node.NodeEntry, testU
 		m.onProbeEvent("latency")
 	}
 
-	if err := m.performLatencyProbe(hash, testURL); err != nil {
+	if _, err := m.performLatencyProbe(hash, testURL); err != nil {
 		log.Printf("[probe] latency probe failed for %s: %v", hash.Hex(), err)
 		return
 	}
 }
 
 func (m *ProbeManager) performEgressProbe(hash node.Hash) (netip.Addr, egressProbeErrorStage, error) {
+	started := time.Now()
+	observation := node.ProbeObservation{Kind: "egress", Target: egressTraceURL, CheckedAt: started}
+	defer func() {
+		observation.CheckedAt = time.Now()
+		observation.DurationMs = float64(time.Since(started)) / float64(time.Millisecond)
+		m.pool.RecordProbeObservation(hash, observation)
+	}()
 	body, latency, err := m.fetcher(hash, egressTraceURL)
+	observation.LatencyMs = float64(latency) / float64(time.Millisecond)
 	if err != nil {
+		observation.Error = err.Error()
 		m.pool.RecordResult(hash, false)
 		m.pool.UpdateNodeEgressIP(hash, nil, nil)
 		return netip.Addr{}, egressProbeFetchError, err
@@ -796,25 +871,37 @@ func (m *ProbeManager) performEgressProbe(hash node.Hash) (netip.Addr, egressPro
 
 	ip, loc, err := ParseCloudflareTrace(body)
 	if err != nil {
+		observation.Error = err.Error()
 		m.pool.UpdateNodeEgressIP(hash, nil, nil)
 		return netip.Addr{}, egressProbeParseError, err
 	}
 	m.pool.UpdateNodeEgressIP(hash, &ip, loc)
+	observation.Success = true
 	return ip, egressProbeNoError, nil
 }
 
-func (m *ProbeManager) performLatencyProbe(hash node.Hash, testURL string) error {
+func (m *ProbeManager) performLatencyProbe(hash node.Hash, testURL string) (time.Duration, error) {
+	started := time.Now()
+	observation := node.ProbeObservation{Kind: "latency", Target: testURL, CheckedAt: started}
+	defer func() {
+		observation.CheckedAt = time.Now()
+		observation.DurationMs = float64(time.Since(started)) / float64(time.Millisecond)
+		m.pool.RecordProbeObservation(hash, observation)
+	}()
 	domain := netutil.ExtractDomain(testURL)
 	_, latency, err := m.fetcher(hash, testURL)
+	observation.LatencyMs = float64(latency) / float64(time.Millisecond)
 	if err != nil {
+		observation.Error = err.Error()
 		m.pool.RecordResult(hash, false)
 		m.pool.RecordLatency(hash, domain, nil)
-		return err
+		return 0, err
 	}
 
 	m.pool.RecordResult(hash, true)
 	m.pool.RecordLatency(hash, domain, &latency)
-	return nil
+	observation.Success = true
+	return latency, nil
 }
 
 func (m *ProbeManager) currentLatencyTestURL() string {

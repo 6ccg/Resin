@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"net"
 	"net/netip"
 	"os"
 	"runtime"
@@ -230,6 +231,7 @@ func newTopologyRuntime(
 		MaxConsecutiveFailures: func() int {
 			return runtimeConfigSnapshot(runtimeCfg).MaxConsecutiveFailures
 		},
+		RecoverySuccessThreshold: func() int { return runtimeConfigSnapshot(runtimeCfg).RecoverySuccessThreshold },
 		LatencyDecayWindow: func() time.Duration {
 			return time.Duration(runtimeConfigSnapshot(runtimeCfg).LatencyDecayWindow)
 		},
@@ -248,10 +250,46 @@ func newTopologyRuntime(
 	outboundMgr := outbound.NewOutboundManager(pool, singboxBuilder)
 
 	probeMgr := probe.NewProbeManager(probe.ProbeConfig{
-		Pool:        pool,
-		Concurrency: envCfg.ProbeConcurrency,
+		Pool:          pool,
+		Concurrency:   256,
+		RuntimeConfig: func() *config.RuntimeConfig { return runtimeConfigSnapshot(runtimeCfg) },
+		ResolveEntry: func(host string) ([]string, error) {
+			if ip, err := netip.ParseAddr(host); err == nil {
+				return []string{ip.String()}, nil
+			}
+			ctx, cancel := context.WithTimeout(context.Background(), time.Duration(runtimeConfigSnapshot(runtimeCfg).ProbeTimeout))
+			defer cancel()
+			ips, err := net.DefaultResolver.LookupNetIP(ctx, "ip", host)
+			result := make([]string, 0, len(ips))
+			for _, ip := range ips {
+				result = append(result, ip.String())
+			}
+			return result, err
+		},
+		ReachabilityTargets: func() []string {
+			return runtimeConfigSnapshot(runtimeCfg).ReachabilityTargets
+		},
+		TargetFetcher: func(hash node.Hash, url string) (int, error) {
+			ctx, cancel := context.WithTimeout(context.Background(), time.Duration(runtimeConfigSnapshot(runtimeCfg).ProbeTimeout))
+			defer cancel()
+			entry, ok := pool.GetEntry(hash)
+			if !ok {
+				return 0, outbound.ErrOutboundNotReady
+			}
+			outboundPtr := entry.Outbound.Load()
+			if outboundPtr == nil {
+				return 0, outbound.ErrOutboundNotReady
+			}
+			status := 0
+			_, _, err := netutil.HTTPGetViaOutbound(ctx, *outboundPtr, url, netutil.OutboundHTTPOptions{
+				HeadersOnly: true, DisableRedirects: true,
+				OnResponse:      func(code int) { status = code },
+				OnConnLifecycle: onProbeConnLifecycle,
+			})
+			return status, err
+		},
 		Fetcher: func(hash node.Hash, url string) ([]byte, time.Duration, error) {
-			ctx, cancel := context.WithTimeout(context.Background(), envCfg.ProbeTimeout)
+			ctx, cancel := context.WithTimeout(context.Background(), time.Duration(runtimeConfigSnapshot(runtimeCfg).ProbeTimeout))
 			defer cancel()
 			entry, ok := pool.GetEntry(hash)
 			if !ok {
@@ -510,6 +548,9 @@ func newFlushReaders(
 				LastLatencyProbeAttemptNs:          entry.LastLatencyProbeAttempt.Load(),
 				LastAuthorityLatencyProbeAttemptNs: entry.LastAuthorityLatencyProbeAttempt.Load(),
 				LastEgressUpdateAttemptNs:          entry.LastEgressUpdateAttempt.Load(),
+				ProbeHistoryJSON:                   string(entry.ProbeHistoryJSON()),
+				InspectionJSON:                     entry.InspectionJSON(),
+				RecoverySuccessCount:               int(entry.RecoverySuccessCount.Load()),
 			}
 		},
 		ReadNodeLatency: func(key model.NodeLatencyKey) *model.NodeLatency {
@@ -836,10 +877,17 @@ func restoreBootstrapNodeDynamics(
 			continue
 		}
 		entry.FailureCount.Store(int32(nd.FailureCount))
+		entry.RecoverySuccessCount.Store(int32(nd.RecoverySuccessCount))
+		if err := entry.RestoreInspection(nd.InspectionJSON); err != nil {
+			return fmt.Errorf("restore node inspection: %w", err)
+		}
 		entry.CircuitOpenSince.Store(nd.CircuitOpenSince)
 		entry.LastLatencyProbeAttempt.Store(nd.LastLatencyProbeAttemptNs)
 		entry.LastAuthorityLatencyProbeAttempt.Store(nd.LastAuthorityLatencyProbeAttemptNs)
 		entry.LastEgressUpdateAttempt.Store(nd.LastEgressUpdateAttemptNs)
+		if err := entry.RestoreProbeHistory(json.RawMessage(nd.ProbeHistoryJSON)); err != nil {
+			return fmt.Errorf("restore probe history for %s: %w", nd.Hash, err)
+		}
 		if nd.EgressIP != "" {
 			if ip, err := netip.ParseAddr(nd.EgressIP); err == nil {
 				entry.SetEgressIP(ip)

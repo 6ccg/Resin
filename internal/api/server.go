@@ -69,6 +69,7 @@ func NewServerWithAddress(
 	authed.Handle("GET /api/v1/system/info", HandleSystemInfo(systemInfo))
 	authed.Handle("GET /api/v1/system/config", HandleSystemConfig(runtimeCfg))
 	authed.Handle("GET /api/v1/system/config/default", HandleSystemDefaultConfig())
+	authed.Handle("GET /api/v1/system/attribute-providers", HandleAttributeProviders())
 	authed.Handle("GET /api/v1/system/config/env", HandleSystemEnvConfig(envCfg))
 
 	if cp != nil {
@@ -117,8 +118,16 @@ func NewServerWithAddress(
 
 		// Nodes.
 		authed.Handle("GET /api/v1/nodes", HandleListNodes(cp))
+		authed.Handle("GET /api/v1/nodes/egresses", HandleListEgresses(cp))
+		authed.Handle("POST /api/v1/nodes/export", HandleExportNodes(cp))
+		authed.Handle("POST /api/v1/nodes/probe-jobs", HandleStartBatchProbes(cp))
+		authed.Handle("GET /api/v1/nodes/probe-jobs/current", HandleBatchProbeStatus(cp))
+		authed.Handle("POST /api/v1/nodes/probe-jobs/{id}/cancel", HandleCancelBatchProbes(cp))
 		authed.Handle("GET /api/v1/nodes/{hash}", HandleGetNode(cp))
+		authed.Handle("GET /api/v1/nodes/{hash}/diagnostics", HandleNodeDiagnostics(cp))
+		authed.Handle("POST /api/v1/nodes/{hash}/actions/check-target", HandleCheckNodeTarget(cp))
 		authed.Handle("POST /api/v1/nodes/{hash}/actions/probe-egress", HandleProbeEgress(cp))
+		authed.Handle("POST /api/v1/nodes/{hash}/actions/probe-attributes", HandleNodeAttributes(cp))
 		authed.Handle("POST /api/v1/nodes/{hash}/actions/probe-latency", HandleProbeLatency(cp))
 
 		// GeoIP.

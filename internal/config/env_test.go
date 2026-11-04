@@ -45,7 +45,6 @@ func TestLoadEnvConfig_Defaults(t *testing.T) {
 
 	// Core
 	assertEqual(t, "MaxLatencyTableEntries", cfg.MaxLatencyTableEntries, 12)
-	assertEqual(t, "ProbeConcurrency", cfg.ProbeConcurrency, 1000)
 	assertEqual(t, "GeoIPUpdateSchedule", cfg.GeoIPUpdateSchedule, "0 7 * * *")
 	assertEqual(t, "DefaultPlatformStickyTTL", cfg.DefaultPlatformStickyTTL, 7*24*time.Hour)
 	assertEqual(t, "DefaultPlatformRegexFiltersLength", len(cfg.DefaultPlatformRegexFilters), 0)
@@ -64,7 +63,6 @@ func TestLoadEnvConfig_Defaults(t *testing.T) {
 		"Authorization",
 	)
 	assertEqual(t, "DefaultPlatformAllocationPolicy", cfg.DefaultPlatformAllocationPolicy, "BALANCED")
-	assertEqual(t, "ProbeTimeout", cfg.ProbeTimeout, 15*time.Second)
 	assertEqual(t, "ResourceFetchTimeout", cfg.ResourceFetchTimeout, 30*time.Second)
 	assertEqual(t, "NodeDNSUpstreamsLength", len(cfg.NodeDNSUpstreams), 4)
 	assertEqual(t, "NodeDNSUpstreams[0]", cfg.NodeDNSUpstreams[0], "https://doh.pub/dns-query")
@@ -103,7 +101,6 @@ func TestLoadEnvConfig_EnvOverrides(t *testing.T) {
 	envs["RESIN_LISTEN_ADDRESS"] = "127.0.0.1"
 	envs["RESIN_PORT"] = "8080"
 	envs["RESIN_API_MAX_BODY_BYTES"] = "2097152"
-	envs["RESIN_PROBE_CONCURRENCY"] = "500"
 	envs["RESIN_GEOIP_UPDATE_SCHEDULE"] = "0 0 * * *"
 	envs["RESIN_DEFAULT_PLATFORM_STICKY_TTL"] = "2h"
 	envs["RESIN_DEFAULT_PLATFORM_REGEX_FILTERS"] = `["^Provider/.*"]`
@@ -112,7 +109,6 @@ func TestLoadEnvConfig_EnvOverrides(t *testing.T) {
 	envs["RESIN_DEFAULT_PLATFORM_REVERSE_PROXY_EMPTY_ACCOUNT_BEHAVIOR"] = "FIXED_HEADER"
 	envs["RESIN_DEFAULT_PLATFORM_REVERSE_PROXY_FIXED_ACCOUNT_HEADER"] = "x-platform-account"
 	envs["RESIN_DEFAULT_PLATFORM_ALLOCATION_POLICY"] = "PREFER_LOW_LATENCY"
-	envs["RESIN_PROBE_TIMEOUT"] = "20s"
 	envs["RESIN_RESOURCE_FETCH_TIMEOUT"] = "45s"
 	envs["RESIN_NODE_DNS_UPSTREAMS"] = `["udp://10.0.0.53","local"]`
 	envs["RESIN_PROXY_TRANSPORT_MAX_IDLE_CONNS"] = "2048"
@@ -131,7 +127,6 @@ func TestLoadEnvConfig_EnvOverrides(t *testing.T) {
 	assertEqual(t, "ListenAddress", cfg.ListenAddress, "127.0.0.1")
 	assertEqual(t, "ResinPort", cfg.ResinPort, 8080)
 	assertEqual(t, "APIMaxBodyBytes", cfg.APIMaxBodyBytes, 2097152)
-	assertEqual(t, "ProbeConcurrency", cfg.ProbeConcurrency, 500)
 	assertEqual(t, "GeoIPUpdateSchedule", cfg.GeoIPUpdateSchedule, "0 0 * * *")
 	assertEqual(t, "DefaultPlatformStickyTTL", cfg.DefaultPlatformStickyTTL, 2*time.Hour)
 	assertEqual(t, "DefaultPlatformRegexFiltersLength", len(cfg.DefaultPlatformRegexFilters), 1)
@@ -153,7 +148,6 @@ func TestLoadEnvConfig_EnvOverrides(t *testing.T) {
 		"X-Platform-Account",
 	)
 	assertEqual(t, "DefaultPlatformAllocationPolicy", cfg.DefaultPlatformAllocationPolicy, "PREFER_LOW_LATENCY")
-	assertEqual(t, "ProbeTimeout", cfg.ProbeTimeout, 20*time.Second)
 	assertEqual(t, "ResourceFetchTimeout", cfg.ResourceFetchTimeout, 45*time.Second)
 	assertEqual(t, "NodeDNSUpstreamsLength", len(cfg.NodeDNSUpstreams), 2)
 	assertEqual(t, "NodeDNSUpstreams[0]", cfg.NodeDNSUpstreams[0], "udp://10.0.0.53")
@@ -448,14 +442,14 @@ func TestLoadEnvConfig_InvalidDuration(t *testing.T) {
 
 func TestLoadEnvConfig_NegativeValue(t *testing.T) {
 	envs := requiredEnvs()
-	envs["RESIN_PROBE_CONCURRENCY"] = "-5"
+	envs["RESIN_API_MAX_BODY_BYTES"] = "-5"
 	setEnvs(t, envs)
 
 	_, err := LoadEnvConfig()
 	if err == nil {
 		t.Fatal("expected error for negative value")
 	}
-	assertContains(t, err.Error(), "RESIN_PROBE_CONCURRENCY")
+	assertContains(t, err.Error(), "RESIN_API_MAX_BODY_BYTES")
 }
 
 func TestLoadEnvConfig_MaxLatencyTableEntriesOutOfRange(t *testing.T) {
@@ -469,19 +463,6 @@ func TestLoadEnvConfig_MaxLatencyTableEntriesOutOfRange(t *testing.T) {
 	}
 	assertContains(t, err.Error(), "RESIN_MAX_LATENCY_TABLE_ENTRIES")
 	assertContains(t, err.Error(), "<= 32")
-}
-
-func TestLoadEnvConfig_ProbeConcurrencyOutOfRange(t *testing.T) {
-	envs := requiredEnvs()
-	envs["RESIN_PROBE_CONCURRENCY"] = "10001"
-	setEnvs(t, envs)
-
-	_, err := LoadEnvConfig()
-	if err == nil {
-		t.Fatal("expected error for RESIN_PROBE_CONCURRENCY > 10000")
-	}
-	assertContains(t, err.Error(), "RESIN_PROBE_CONCURRENCY")
-	assertContains(t, err.Error(), "<= 10000")
 }
 
 func TestLoadEnvConfig_InvalidGeoIPSchedule(t *testing.T) {
@@ -558,18 +539,6 @@ func TestLoadEnvConfig_DefaultPlatformRegexRuleSyntax(t *testing.T) {
 	if !reflect.DeepEqual(cfg.DefaultPlatformRegexFilters, want) {
 		t.Fatalf("default platform regex rules: got %v, want %v", cfg.DefaultPlatformRegexFilters, want)
 	}
-}
-
-func TestLoadEnvConfig_InvalidProbeTimeout(t *testing.T) {
-	envs := requiredEnvs()
-	envs["RESIN_PROBE_TIMEOUT"] = "0s"
-	setEnvs(t, envs)
-
-	_, err := LoadEnvConfig()
-	if err == nil {
-		t.Fatal("expected error for invalid probe timeout")
-	}
-	assertContains(t, err.Error(), "RESIN_PROBE_TIMEOUT")
 }
 
 func TestLoadEnvConfig_InvalidProxyTransportSettings(t *testing.T) {

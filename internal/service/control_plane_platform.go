@@ -589,22 +589,29 @@ type PlatformSpecFilter struct {
 
 // NodeSummary is the API response for a node.
 type NodeSummary struct {
-	NodeHash                         string    `json:"node_hash"`
-	CreatedAt                        string    `json:"created_at"`
-	Enabled                          bool      `json:"enabled"`
-	DisplayTag                       string    `json:"display_tag,omitempty"`
-	HasOutbound                      bool      `json:"has_outbound"`
-	LastError                        string    `json:"last_error,omitempty"`
-	CircuitOpenSince                 *string   `json:"circuit_open_since"`
-	FailureCount                     int       `json:"failure_count"`
-	EgressIP                         string    `json:"egress_ip,omitempty"`
-	Region                           string    `json:"region,omitempty"`
-	LastEgressUpdate                 string    `json:"last_egress_update,omitempty"`
-	LastLatencyProbeAttempt          string    `json:"last_latency_probe_attempt,omitempty"`
-	LastAuthorityLatencyProbeAttempt string    `json:"last_authority_latency_probe_attempt,omitempty"`
-	ReferenceLatencyMs               *float64  `json:"reference_latency_ms,omitempty"`
-	LastEgressUpdateAttempt          string    `json:"last_egress_update_attempt,omitempty"`
-	Tags                             []NodeTag `json:"tags"`
+	NodeHash                         string                 `json:"node_hash"`
+	CreatedAt                        string                 `json:"created_at"`
+	Enabled                          bool                   `json:"enabled"`
+	DisplayTag                       string                 `json:"display_tag,omitempty"`
+	HasOutbound                      bool                   `json:"has_outbound"`
+	LastError                        string                 `json:"last_error,omitempty"`
+	CircuitOpenSince                 *string                `json:"circuit_open_since"`
+	FailureCount                     int                    `json:"failure_count"`
+	EgressIP                         string                 `json:"egress_ip,omitempty"`
+	Region                           string                 `json:"region,omitempty"`
+	LastEgressUpdate                 string                 `json:"last_egress_update,omitempty"`
+	LastLatencyProbeAttempt          string                 `json:"last_latency_probe_attempt,omitempty"`
+	LastAuthorityLatencyProbeAttempt string                 `json:"last_authority_latency_probe_attempt,omitempty"`
+	ReferenceLatencyMs               *float64               `json:"reference_latency_ms,omitempty"`
+	LastEgressUpdateAttempt          string                 `json:"last_egress_update_attempt,omitempty"`
+	Tags                             []NodeTag              `json:"tags"`
+	ProbeStability                   *node.ProbeStability   `json:"probe_stability,omitempty"`
+	Entry                            node.EntryEndpoint     `json:"entry"`
+	EntryIPs                         []string               `json:"entry_ips"`
+	Attributes                       *node.EgressAttributes `json:"attributes,omitempty"`
+	AttributesCurrent                bool                   `json:"attributes_current"`
+	AttributesError                  string                 `json:"attributes_error,omitempty"`
+	Validity                         string                 `json:"validity"`
 }
 
 // IsHealthyAndEnabled follows the node-summary health rule used by API/UI
@@ -621,6 +628,7 @@ type NodeTag struct {
 }
 
 func (s *ControlPlaneService) nodeEntryToSummary(h node.Hash, entry *node.NodeEntry) NodeSummary {
+	stability := entry.ProbeStability()
 	ns := NodeSummary{
 		NodeHash:     h.Hex(),
 		CreatedAt:    entry.CreatedAt.UTC().Format(time.RFC3339Nano),
@@ -629,11 +637,18 @@ func (s *ControlPlaneService) nodeEntryToSummary(h node.Hash, entry *node.NodeEn
 		LastError:    entry.GetLastError(),
 		FailureCount: int(entry.FailureCount.Load()),
 	}
+	if stability.Samples > 0 {
+		ns.ProbeStability = &stability
+	}
 
 	if s != nil && s.Pool != nil {
 		ns.Enabled = !s.Pool.IsNodeDisabled(h)
 		ns.DisplayTag = s.Pool.ResolveNodeDisplayTag(h)
 	}
+	ns.Entry, ns.EntryIPs = entry.Endpoint(), entry.EntryIPs()
+	ns.Attributes, ns.AttributesError = entry.Inspection().Attributes, entry.Inspection().AttributesError
+	ns.AttributesCurrent = s.currentAttributes(entry) != nil
+	ns.Validity = entry.Validity(ns.Enabled, time.Duration(s.nodeSettings().NodeValidityTTL))
 
 	if cos := entry.CircuitOpenSince.Load(); cos > 0 {
 		t := time.Unix(0, cos).UTC().Format(time.RFC3339Nano)
@@ -643,10 +658,7 @@ func (s *ControlPlaneService) nodeEntryToSummary(h node.Hash, entry *node.NodeEn
 	egressIP := entry.GetEgressIP()
 	if egressIP.IsValid() {
 		ns.EgressIP = egressIP.String()
-		ns.Region = entry.GetRegion(nil)
-		if s.GeoIP != nil {
-			ns.Region = entry.GetRegion(s.GeoIP.Lookup)
-		}
+		ns.Region = s.nodeRegion(entry)
 	}
 
 	if leu := entry.LastEgressUpdate.Load(); leu > 0 {

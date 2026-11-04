@@ -19,6 +19,10 @@ import { listPlatforms } from "../platforms/api";
 import type { Platform } from "../platforms/types";
 import { listSubscriptions } from "../subscriptions/api";
 import { getNode, listNodes, probeEgress, probeLatency } from "./api";
+import { NodeDiagnosticsPanel } from "./NodeDiagnostics";
+import { NodePoolActions } from "./NodePoolActions";
+import { EgressDirectory } from "./EgressDirectory";
+import { NodeAttributesPanel } from "./NodeAttributes";
 import type { NodeSummary } from "./types";
 import { getAllRegions, getRegionName } from "./regions";
 import type { NodeListFilters, NodeSortBy, SortOrder } from "./types";
@@ -34,6 +38,13 @@ type NodeFilterDraft = {
   region: string;
   egress_ip: string;
   status: NodeStatusFilter;
+  entry_keyword: string;
+  network_types: string;
+  exclude_regions: string;
+  hosting: string;
+  company_keyword: string;
+  asn_keyword: string;
+  validity: string;
 };
 
 const defaultFilterDraft: NodeFilterDraft = {
@@ -43,6 +54,7 @@ const defaultFilterDraft: NodeFilterDraft = {
   region: "",
   egress_ip: "",
   status: "all",
+  entry_keyword: "", network_types: "", exclude_regions: "", hosting: "", company_keyword: "", asn_keyword: "", validity: "",
 };
 
 const PAGE_SIZE_OPTIONS = [20, 50, 100, 200, 500, 1000, 2000, 5000] as const;
@@ -133,6 +145,13 @@ function draftFromQuery(search: string): NodeFilterDraft {
     region: trimQueryValue(params, "region").toUpperCase(),
     egress_ip: trimQueryValue(params, "egress_ip"),
     status: statusFromQuery(params),
+    entry_keyword: trimQueryValue(params, "entry_keyword"),
+    network_types: trimQueryValue(params, "network_types"),
+    exclude_regions: trimQueryValue(params, "exclude_regions"),
+    hosting: trimQueryValue(params, "hosting"),
+    company_keyword: trimQueryValue(params, "company_keyword"),
+    asn_keyword: trimQueryValue(params, "asn_keyword"),
+    validity: trimQueryValue(params, "validity"),
   };
 }
 
@@ -172,6 +191,14 @@ function draftToActiveFilters(draft: NodeFilterDraft): NodeListFilters {
     tag_keyword: draft.tag_keyword,
     region: draft.region,
     egress_ip: draft.egress_ip,
+    entry_keyword: draft.entry_keyword,
+    network_types: draft.network_types.split(",").map((value) => value.trim()).filter(Boolean),
+    exclude_regions: draft.exclude_regions.split(",").map((value) => value.trim()).filter(Boolean),
+    company_keyword: draft.company_keyword,
+    asn_keyword: draft.asn_keyword,
+    validity: draft.validity,
+    hosting: draft.hosting === "true" ? true : draft.hosting === "false" ? false : undefined,
+    hosting_unknown: draft.hosting === "unknown",
     enabled,
     circuit_open,
     has_outbound,
@@ -273,6 +300,8 @@ export function NodesPage() {
   const [pageSize, setPageSize] = useState<number>(200);
   const [selectedNodeHash, setSelectedNodeHash] = useState("");
   const [drawerOpen, setDrawerOpen] = useState(false);
+  const [view, setView] = useState("nodes");
+  const [checkedHashes, setCheckedHashes] = useState<Set<string>>(new Set());
   const [pendingEgressHashes, setPendingEgressHashes] = useState<Set<string>>(() => new Set());
   const [pendingLatencyHashes, setPendingLatencyHashes] = useState<Set<string>>(() => new Set());
   const { toasts, showToast, dismissToast } = useToast();
@@ -379,6 +408,7 @@ export function NodesPage() {
     await queryClient.invalidateQueries({ queryKey: ["nodes"] });
     if (selectedHash) {
       await queryClient.invalidateQueries({ queryKey: ["node", selectedHash] });
+      await queryClient.invalidateQueries({ queryKey: ["node-diagnostics", selectedHash] });
     }
   };
 
@@ -405,7 +435,7 @@ export function NodesPage() {
     mutationFn: async (hash: string) => probeLatency(hash),
     onSuccess: async (result) => {
       await refreshNodes();
-      showToast("success", t("延迟探测完成：延迟={{latency}}", { latency: formatLatency(result.latency_ewma_ms) }));
+      showToast("success", t("延迟探测完成：本次 {{latency}}，平滑 {{ewma}}", { latency: formatLatency(result.latency_ms), ewma: formatLatency(result.latency_ewma_ms) }));
     },
     onError: async (error) => {
       await refreshNodes();
@@ -522,6 +552,12 @@ export function NodesPage() {
   const col = createColumnHelper<NodeSummary>();
 
   const nodeColumns = [
+    col.display({
+      id: "selected",
+      header: () => <input type="checkbox" aria-label={t("选择本页节点")} checked={Boolean(nodes.length) && nodes.every((node) => checkedHashes.has(node.node_hash))} onChange={(event) => setCheckedHashes((previous) => { const next = new Set(previous); for (const node of nodes) { if (event.target.checked) next.add(node.node_hash); else next.delete(node.node_hash); } return next; })} />,
+      cell: (info) => <span onClick={(event) => event.stopPropagation()}><input type="checkbox" aria-label={t("选择节点")} checked={checkedHashes.has(info.row.original.node_hash)} onChange={(event) => setCheckedHashes((previous) => { const next = new Set(previous); if (event.target.checked) next.add(info.row.original.node_hash); else next.delete(info.row.original.node_hash); return next; })} /></span>,
+    }),
+    col.display({ id: "entry", header: t("入口地址"), cell: (info) => { const entry = info.row.original.entry; return <span title={info.row.original.entry_ips.join(", ")}>{entry.host}:{entry.port}</span>; } }),
     col.accessor((row) => firstTag(row), {
       id: "tag",
       header: () => (
@@ -563,6 +599,9 @@ export function NodesPage() {
         );
       },
     }),
+    col.display({ id: "network_type", header: t("网络类型"), cell: (info) => info.row.original.attributes_current ? info.row.original.attributes?.network_type || "unknown" : "unknown" }),
+    col.display({ id: "company", header: t("公司/云商"), cell: (info) => info.row.original.attributes_current ? info.row.original.attributes?.company || "unknown" : "unknown" }),
+    col.display({ id: "validity", header: t("检测有效性"), cell: (info) => { const value = info.row.original.validity; return <Badge variant={value === "valid" ? "success" : value === "invalid" ? "danger" : "neutral"}>{t(({ valid: "有效", invalid: "无效", expired: "已过期", untested: "未测试", disabled: "禁用", error: "错误" } as Record<string, string>)[value] || "未知")}</Badge>; } }),
     col.display({
       id: "reference_latency_ms",
       header: t("参考延迟"),
@@ -582,6 +621,14 @@ export function NodesPage() {
     col.accessor("last_latency_probe_attempt", {
       header: t("上次探测"),
       cell: (info) => formatRelativeTime(info.getValue()),
+    }),
+    col.display({
+      id: "probe_stability",
+      header: t("探测成功率"),
+      cell: (info) => {
+        const stats = info.row.original.probe_stability;
+        return stats ? `${(stats.success_rate * 100).toFixed(1)}% (${stats.samples})` : "-";
+      },
     }),
     col.accessor("failure_count", {
       header: () => (
@@ -743,19 +790,21 @@ export function NodesPage() {
               <label htmlFor="node-region" style={{ fontSize: "0.75rem", color: "var(--text-secondary)" }}>
                 {t("区域")}
               </label>
-              <Select
+              <Input
                 id="node-region"
                 value={draftFilters.region}
                 onChange={(event) => handleFilterChange("region", event.target.value)}
                 style={NODE_FILTER_CONTROL_STYLE}
-              >
-                <option value="">{t("全部")}</option>
+                list="node-countries"
+                placeholder="US,JP,HK"
+              />
+              <datalist id="node-countries">
                 {allRegions.map((r) => (
                   <option key={r.code} value={r.code}>
                     {r.name}
                   </option>
                 ))}
-              </Select>
+              </datalist>
             </div>
 
             <div style={NODE_FILTER_ITEM_STYLE}>
@@ -789,6 +838,19 @@ export function NodesPage() {
               </Select>
             </div>
 
+            {([
+              ["entry_keyword", "入口域名/IP", "host / IP / CIDR"],
+              ["network_types", "网络类型", "education,isp,hosting"],
+              ["exclude_regions", "排除国家", "CN,RU"],
+              ["company_keyword", "公司/云商", ""],
+              ["asn_keyword", "ASN", "AS12345"],
+            ] as const).map(([key, label, placeholder]) => <div key={key} style={NODE_FILTER_ITEM_STYLE}>
+              <label htmlFor={`node-${key}`}>{t(label)}</label><Input id={`node-${key}`} value={draftFilters[key]} placeholder={placeholder} onChange={(event) => handleFilterChange(key, event.target.value)} />
+            </div>)}
+            <div style={NODE_FILTER_ITEM_STYLE}><label htmlFor="node-hosting">Hosting</label><Select id="node-hosting" value={draftFilters.hosting} onChange={(event) => handleFilterChange("hosting", event.target.value)}><option value="">{t("全部")}</option><option value="true">true</option><option value="false">false</option><option value="unknown">{t("未知")}</option></Select></div>
+            <div style={NODE_FILTER_ITEM_STYLE}><label htmlFor="node-validity">{t("检测有效性")}</label><Select id="node-validity" value={draftFilters.validity} onChange={(event) => handleFilterChange("validity", event.target.value)}>
+              <option value="">{t("全部")}</option><option value="valid">{t("有效")}</option><option value="invalid">{t("无效")}</option><option value="expired">{t("已过期")}</option><option value="untested">{t("未测试")}</option>
+            </Select></div>
             <div style={{ display: "flex", gap: "0.5rem", marginBottom: "0.125rem", marginLeft: "auto" }}>
               <Button size="sm" variant="secondary" onClick={refreshNodes} disabled={nodesQuery.isFetching} style={{ minHeight: "32px", height: "32px", padding: "0 0.75rem", display: "flex", alignItems: "center", gap: "0.25rem" }}>
                 <RefreshCw size={16} className={nodesQuery.isFetching ? "spin" : undefined} />
@@ -803,7 +865,12 @@ export function NodesPage() {
         </div>
       </Card>
 
-      <Card className="nodes-table-card platform-cards-container subscriptions-table-card">
+      <NodePoolActions filters={activeFilters} selected={[...checkedHashes]} clearSelection={() => setCheckedHashes(new Set())} />
+      <div className="list-card-header">
+        <Button variant={view === "nodes" ? "primary" : "secondary"} onClick={() => setView("nodes")}>{t("节点视图")}</Button>
+        <Button variant={view === "egresses" ? "primary" : "secondary"} onClick={() => setView("egresses")}>{t("出口视图")}</Button>
+      </div>
+      {view === "egresses" ? <EgressDirectory key={JSON.stringify(activeFilters)} filters={activeFilters} onSelect={(ip) => { handleFilterChange("egress_ip", ip); setView("nodes"); }} /> : <Card className="nodes-table-card platform-cards-container subscriptions-table-card">
         {nodesQuery.isLoading ? <p className="muted">{t("正在加载节点数据...")}</p> : null}
 
         {nodesQuery.isError ? (
@@ -838,7 +905,7 @@ export function NodesPage() {
           onPageChange={setPage}
           onPageSizeChange={changePageSize}
         />
-      </Card>
+      </Card>}
 
       {drawerVisible && detailNode ? (
         <div
@@ -942,6 +1009,9 @@ export function NodesPage() {
                   <div className="callout callout-error">{t("最近错误：{{message}}", { message: detailNode.last_error })}</div>
                 ) : null}
               </section>
+
+              <NodeDiagnosticsPanel key={detailNode.node_hash} hash={detailNode.node_hash} ready={detailNode.has_outbound} />
+              <NodeAttributesPanel node={detailNode} />
 
               <section className="platform-drawer-section">
                 <div className="platform-drawer-section-head">
