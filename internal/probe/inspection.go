@@ -25,7 +25,27 @@ func (m *ProbeManager) settings() *config.RuntimeConfig {
 	return cfg
 }
 
-func (m *ProbeManager) acquireSlot(ctx context.Context) bool {
+// When both classes have work, reserve half of the slots for manual batches.
+// Either class can use spare capacity when the other has no waiting tasks.
+func (m *ProbeManager) acquireSlot(ctx context.Context, batch bool) bool {
+	m.slotMu.Lock()
+	if batch {
+		m.slotBatchWaiting++
+	} else {
+		m.slotNormalWaiting++
+	}
+	m.slotMu.Unlock()
+	defer func() {
+		m.slotMu.Lock()
+		if batch {
+			m.slotBatchWaiting--
+		} else {
+			m.slotNormalWaiting--
+		}
+		close(m.slotChanged)
+		m.slotChanged = make(chan struct{})
+		m.slotMu.Unlock()
+	}()
 	for {
 		select {
 		case <-ctx.Done():
@@ -36,8 +56,16 @@ func (m *ProbeManager) acquireSlot(ctx context.Context) bool {
 		}
 		m.slotMu.Lock()
 		limit := max(1, m.settings().ProbeConcurrency)
-		if m.slotsActive < limit {
+		reserved := max(1, limit/2)
+		allowed := m.slotBatchWaiting == 0 || m.slotBatchActive >= reserved
+		if batch {
+			allowed = m.slotBatchActive < reserved || m.slotNormalWaiting == 0
+		}
+		if m.slotsActive < limit && allowed {
 			m.slotsActive++
+			if batch {
+				m.slotBatchActive++
+			}
 			m.slotMu.Unlock()
 			return true
 		}
@@ -53,9 +81,12 @@ func (m *ProbeManager) acquireSlot(ctx context.Context) bool {
 	}
 }
 
-func (m *ProbeManager) releaseSlot() {
+func (m *ProbeManager) releaseSlot(batch bool) {
 	m.slotMu.Lock()
 	m.slotsActive--
+	if batch {
+		m.slotBatchActive--
+	}
 	close(m.slotChanged)
 	m.slotChanged = make(chan struct{})
 	m.slotMu.Unlock()

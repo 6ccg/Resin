@@ -70,6 +70,9 @@ type ProbeManager struct {
 	resolveEntry        func(string) ([]string, error)
 	slotMu              sync.Mutex
 	slotsActive         int
+	slotBatchActive     int
+	slotBatchWaiting    int
+	slotNormalWaiting   int
 	slotChanged         chan struct{}
 	lifecycleMu         sync.Mutex
 	stopped             bool
@@ -572,9 +575,9 @@ func (m *ProbeManager) runProbeWorker() {
 			continue
 		}
 
-		if m.acquireSlot(context.Background()) {
+		if m.acquireSlot(context.Background(), false) {
 			m.executeTask(task)
-			m.releaseSlot()
+			m.releaseSlot(false)
 		}
 		m.finishTask(task.key, state)
 	}

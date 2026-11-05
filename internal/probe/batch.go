@@ -87,7 +87,7 @@ func (m *ProbeManager) StartBatch(kind string, hashes []node.Hash) (*BatchStatus
 					if index >= len(hashes) {
 						return
 					}
-					if !m.acquireSlot(ctx) {
+					if !m.acquireSlot(ctx, true) {
 						return
 					}
 					hash := hashes[index]
@@ -117,7 +117,7 @@ func (m *ProbeManager) StartBatch(kind string, hashes []node.Hash) (*BatchStatus
 							}
 						}
 					}
-					m.releaseSlot()
+					m.releaseSlot(true)
 					m.jobMu.Lock()
 					job.status.Completed++
 					if skipped {
