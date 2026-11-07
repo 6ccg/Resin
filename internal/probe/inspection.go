@@ -223,7 +223,7 @@ func (m *ProbeManager) scanAttributes() {
 			interval = retryInterval(time.Duration(cfg.RecoveryProbeInterval), min(interval, time.Duration(cfg.RecoveryProbeMaxInterval)), max(0, inspection.AttributesFailures-1))
 		}
 		sameSource := inspection.Attributes != nil && inspection.Attributes.Provider == cfg.EgressAttributesProvider && inspection.Attributes.SourceURL == cfg.EgressAttributesURL && inspection.Attributes.IP == entry.GetEgressIP().String()
-		if (sameSource || inspection.Attributes == nil && inspection.AttributesError != "") && inspection.AttributesAttemptAt != nil && time.Since(*inspection.AttributesAttemptAt) < interval {
+		if (sameSource || inspection.AttributesError != "") && inspection.AttributesAttemptAt != nil && time.Since(*inspection.AttributesAttemptAt) < interval {
 			return true
 		}
 		m.enqueuePeriodicProbe(hash, probeTaskKindAttributes, probePriorityNormal)

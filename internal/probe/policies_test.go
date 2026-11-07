@@ -12,15 +12,17 @@ import (
 
 func TestAttributeFailuresBackOffAndResetOnSuccess(t *testing.T) {
 	for _, tc := range []struct {
-		name     string
-		failures int
-		age      time.Duration
-		due      bool
+		name            string
+		failures        int
+		age             time.Duration
+		due             bool
+		staleAttributes bool
 	}{
-		{"first_failure", 1, 90 * time.Second, true},
-		{"repeated_failure", 3, 90 * time.Second, false},
-		{"capped_before_due", 20, 59 * time.Minute, false},
-		{"capped_due", 20, 61 * time.Minute, true},
+		{"first_failure", 1, 90 * time.Second, true, false},
+		{"repeated_failure", 3, 90 * time.Second, false, false},
+		{"capped_before_due", 20, 59 * time.Minute, false, false},
+		{"capped_due", 20, 61 * time.Minute, true, false},
+		{"stale_attributes_still_back_off", 3, 90 * time.Second, false, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			pool := topology.NewGlobalNodePool(topology.PoolConfig{MaxConsecutiveFailures: func() int { return 3 }})
@@ -30,7 +32,11 @@ func TestAttributeFailuresBackOffAndResetOnSuccess(t *testing.T) {
 			storeOutbound(entry)
 			entry.CircuitOpenSince.Store(0)
 			attempt := time.Now().Add(-tc.age)
-			data, _ := json.Marshal(node.Inspection{AttributesAttemptAt: &attempt, AttributesError: "provider timeout", AttributesFailures: tc.failures})
+			inspection := node.Inspection{AttributesAttemptAt: &attempt, AttributesError: "provider timeout", AttributesFailures: tc.failures}
+			if tc.staleAttributes {
+				inspection.Attributes = &node.EgressAttributes{IP: "192.0.2.1"}
+			}
+			data, _ := json.Marshal(inspection)
 			if err := entry.RestoreInspection(string(data)); err != nil {
 				t.Fatal(err)
 			}
