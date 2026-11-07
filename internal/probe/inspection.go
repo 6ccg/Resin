@@ -177,7 +177,7 @@ func (m *ProbeManager) scanAttributes() {
 		if (sameSource || inspection.Attributes == nil && inspection.AttributesError != "") && inspection.AttributesAttemptAt != nil && time.Since(*inspection.AttributesAttemptAt) < interval {
 			return true
 		}
-		m.enqueueProbe(hash, probeTaskKindAttributes, probePriorityNormal)
+		m.enqueuePeriodicProbe(hash, probeTaskKindAttributes, probePriorityNormal)
 		return true
 	})
 }

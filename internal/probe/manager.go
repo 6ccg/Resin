@@ -502,7 +502,7 @@ func (m *ProbeManager) scanEgress() {
 			}
 		}
 
-		m.enqueueProbe(h, probeTaskKindEgress, probePriorityNormal)
+		m.enqueuePeriodicProbe(h, probeTaskKindEgress, probePriorityNormal)
 
 		return true
 	})
@@ -557,7 +557,13 @@ func (m *ProbeManager) scanLatency() {
 			return true
 		}
 
-		m.enqueueProbe(h, probeTaskKindLatency, probePriorityNormal)
+		// Keep usable nodes fresh and give new nodes their first test before
+		// spending the queue on recovery retries and attribute lookups.
+		priority := probePriorityHigh
+		if entry.IsCircuitOpen() && entry.FailureCount.Load() > 0 {
+			priority = probePriorityNormal
+		}
+		m.enqueuePeriodicProbe(h, probeTaskKindLatency, priority)
 
 		return true
 	})
@@ -619,6 +625,16 @@ func (m *ProbeManager) executeTask(task probeTask) {
 }
 
 func (m *ProbeManager) enqueueProbe(hash node.Hash, kind probeTaskKind, priority probePriority) bool {
+	return m.enqueueTask(hash, kind, priority, true)
+}
+
+// Periodic scans only ensure a task exists. Repeated scans while it waits or
+// runs must not request another execution after it completes.
+func (m *ProbeManager) enqueuePeriodicProbe(hash node.Hash, kind probeTaskKind, priority probePriority) bool {
+	return m.enqueueTask(hash, kind, priority, false)
+}
+
+func (m *ProbeManager) enqueueTask(hash node.Hash, kind probeTaskKind, priority probePriority, repeat bool) bool {
 	key := probeTaskKey{hash: hash, kind: kind}
 	state, _ := m.taskStates.LoadOrCompute(key, func() (*probeTaskState, bool) {
 		return &probeTaskState{}, false
@@ -628,6 +644,9 @@ func (m *ProbeManager) enqueueProbe(hash node.Hash, kind probeTaskKind, priority
 	for {
 		flags := state.flags.Load()
 		if flags&taskFlagRunning != 0 {
+			if !repeat {
+				return false
+			}
 			next := flags | taskFlagDirty
 			if priority == probePriorityHigh {
 				next |= taskFlagDirtyHigh
@@ -661,6 +680,9 @@ func (m *ProbeManager) enqueueProbe(hash node.Hash, kind probeTaskKind, priority
 				continue
 			}
 
+			if !repeat {
+				return false
+			}
 			next := flags | taskFlagDirty
 			if priority == probePriorityHigh {
 				next |= taskFlagDirtyHigh
