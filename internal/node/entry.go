@@ -34,9 +34,11 @@ func (f TagFilter) Empty() bool {
 // Static fields are set at creation; dynamic fields use atomics or mutex.
 type NodeEntry struct {
 	// --- Static (immutable after creation) ---
-	Hash       Hash
-	RawOptions json.RawMessage
-	CreatedAt  time.Time
+	Hash         Hash
+	RawOptions   json.RawMessage
+	CreatedAt    time.Time
+	endpointOnce sync.Once
+	endpoint     EntryEndpoint
 
 	// --- Dynamic (guarded by mu) ---
 	mu              sync.RWMutex

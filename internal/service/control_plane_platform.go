@@ -646,7 +646,8 @@ func (s *ControlPlaneService) nodeEntryToSummary(h node.Hash, entry *node.NodeEn
 		ns.DisplayTag = s.Pool.ResolveNodeDisplayTag(h)
 	}
 	ns.Entry, ns.EntryIPs = entry.Endpoint(), entry.EntryIPs()
-	ns.Attributes, ns.AttributesError = entry.Inspection().Attributes, entry.Inspection().AttributesError
+	inspection := entry.Inspection()
+	ns.Attributes, ns.AttributesError = inspection.Attributes, inspection.AttributesError
 	ns.AttributesCurrent = s.currentAttributes(entry) != nil
 	ns.Validity = entry.Validity(ns.Enabled, time.Duration(s.nodeSettings().NodeValidityTTL))
 

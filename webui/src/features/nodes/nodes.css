@@ -1,0 +1,64 @@
+.node-pool-header { align-items: center; }
+.node-pool-header-actions { display: flex; align-items: center; gap: 8px; }
+.node-pool-card { padding: 16px; box-shadow: none; background: var(--surface-strong); }
+.node-pool-overview { display: flex; align-items: center; justify-content: space-between; gap: 24px; padding-bottom: 14px; border-bottom: 1px solid var(--border); }
+.node-pool-tabs { display: inline-flex; align-items: center; gap: 4px; padding: 4px; border-radius: 10px; background: var(--bg); }
+.node-pool-tabs button { padding: 8px 16px; border: 0; border-radius: 7px; background: transparent; color: var(--text-muted); font: inherit; font-size: 13px; font-weight: 600; cursor: pointer; }
+.node-pool-tabs button[aria-selected="true"] { color: var(--primary-strong); background: var(--surface-strong); box-shadow: 0 1px 3px var(--border); }
+.node-pool-tabs button:focus-visible, .node-pool-text-button:focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; }
+.node-pool-totals { display: flex; gap: 24px; font-size: 12px; color: var(--text-muted); font-variant-numeric: tabular-nums; }
+.node-pool-totals strong { margin-left: 6px; font-size: 18px; font-weight: 700; color: var(--text); }
+.node-pool-totals .node-pool-healthy { color: var(--success); }
+.node-pool-filterbar { display: flex; align-items: center; gap: 10px; padding-top: 14px; }
+.node-pool-filterbar > .select { width: 140px; }
+.node-pool-filterbar > .node-pool-country { width: 170px; }
+.node-pool-search { flex: 1; min-width: 180px; position: relative; }
+.node-pool-search > svg { position: absolute; left: 12px; top: 50%; transform: translateY(-50%); color: var(--text-muted); pointer-events: none; }
+.node-pool-search .input { padding-left: 36px; }
+.node-pool-filterbar .input, .node-pool-filterbar .select, .node-pool-advanced .input, .node-pool-advanced .select, .node-pool-tools .select { height: 36px; min-height: 36px; padding-top: 0; padding-bottom: 0; border-radius: 8px; font-size: 13px; }
+.node-pool-filter-count { padding: 0 5px; border-radius: 4px; background: var(--surface); color: var(--primary-strong); }
+.node-pool-advanced { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 14px; margin-top: 16px; padding-top: 16px; border-top: 1px solid var(--border); }
+.node-pool-advanced .field-group { margin: 0; min-width: 0; gap: 6px; }
+.node-pool-results { padding-top: 0; }
+.node-pool-results-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 12px; min-height: 56px; }
+.node-pool-result-hint { display: flex; gap: 10px; align-items: center; color: var(--text-muted); font-size: 12px; }
+.node-pool-result-hint > strong { color: var(--primary-strong); }
+.node-pool-text-button { border: 0; background: transparent; padding: 0; color: var(--primary); cursor: pointer; font: inherit; font-size: 12px; }
+.node-pool-updating { display: inline-flex; align-items: center; gap: 4px; white-space: nowrap; }
+.node-pool-sort { display: flex; gap: 8px; align-items: center; color: var(--text-muted); font-size: 12px; }
+.node-pool-sort .select { width: 125px; height: 32px; padding: 0 10px; border-radius: 8px; font-size: 12px; }
+.node-pool-sort .btn { padding: 6px; }
+.node-pool-table-wrap { margin: 0; max-height: min(680px, 65vh); border-radius: 9px; background: var(--surface-strong); }
+.node-pool-table { table-layout: fixed; min-width: 1080px; }
+.node-pool-table th, .node-pool-table td { padding: 11px 10px; }
+.node-pool-table th, .node-pool-egress-table th { background: var(--bg); color: var(--text-muted); font-size: 12px; white-space: nowrap; }
+.node-pool-cell { display: flex; flex-direction: column; align-items: flex-start; gap: 5px; min-width: 0; line-height: 1.35; font-variant-numeric: tabular-nums; }
+.node-pool-cell > strong, .node-pool-cell > span, .node-pool-cell > code, .node-pool-cell > small { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.node-pool-cell > strong { font-size: 13px; font-weight: 600; }
+.node-pool-cell > small { display: flex; align-items: center; gap: 6px; color: var(--text-muted); font-size: 11px; }
+.node-pool-address code { font-family: ui-monospace, SFMono-Regular, Consolas, monospace; font-size: 12px; }
+.node-pool-protocol { border: 1px solid var(--border); border-radius: 4px; padding: 1px 4px; color: var(--text-muted); font-size: 10px; text-transform: uppercase; }
+.node-pool-table .nodes-row-actions { gap: 4px; }
+.node-pool-table .nodes-row-actions .btn { padding: 6px; background: transparent; border-color: transparent; }
+.node-pool-table .nodes-row-actions .btn:hover { color: var(--primary); background: var(--primary-soft); }
+.node-pool-loading { display: flex; align-items: center; justify-content: center; gap: 10px; min-height: 240px; color: var(--text-muted); font-size: 13px; }
+.node-pool-scope { display: flex; align-items: center; gap: 12px; margin-bottom: 18px; font-size: 13px; color: var(--text-muted); }
+.node-pool-scope .select { width: 250px; }
+.node-pool-tool-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 24px; }
+.node-pool-tool-section + .node-pool-tool-section { padding-left: 24px; border-left: 1px solid var(--border); }
+.node-pool-tool-section h3 { display: flex; align-items: center; gap: 8px; margin-bottom: 12px; font-size: 14px; }
+.node-pool-tool-controls { display: flex; align-items: center; gap: 10px; }
+.node-pool-tool-controls .select { flex: 1; min-width: 0; }
+.node-pool-hint { margin-top: 8px; color: var(--text-muted); font-size: 12px; line-height: 1.6; }
+.node-pool-results-toolbar .node-pool-hint { margin: 0; }
+.node-pool-export-options { display: flex; align-items: center; gap: 18px; margin-top: 10px; color: var(--text-muted); font-size: 12px; }
+.node-pool-export-options label { display: inline-flex; align-items: center; gap: 5px; }
+.nodes-page input[type="checkbox"] { accent-color: var(--primary); cursor: pointer; }
+.node-pool-progress { margin-top: 16px; padding-top: 12px; border-top: 1px solid var(--border); }
+.node-pool-progress > div { display: flex; align-items: center; gap: 14px; font-size: 12px; }
+.node-pool-progress > div > span { color: var(--text-muted); }
+.node-pool-progress .btn { margin-left: auto; }
+.node-pool-progress progress { display: block; margin-top: 10px; width: 100%; height: 6px; accent-color: var(--primary); }
+.node-pool-export-result { margin-top: 12px; color: var(--text-muted); font-size: 12px; }
+.node-pool-export-result details { margin-top: 8px; max-height: 240px; overflow: auto; }
+.node-pool-export-result summary { cursor: pointer; }

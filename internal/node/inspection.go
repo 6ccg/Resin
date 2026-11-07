@@ -43,20 +43,23 @@ type EntryEndpoint struct {
 }
 
 func (e *NodeEntry) Endpoint() EntryEndpoint {
-	var options struct {
-		Type   string `json:"type"`
-		Server string `json:"server"`
-		Port   uint16 `json:"server_port"`
-		TLS    struct {
-			Enabled bool `json:"enabled"`
-		} `json:"tls"`
-	}
-	_ = json.Unmarshal(e.RawOptions, &options)
-	protocol := options.Type
-	if protocol == "http" && options.TLS.Enabled {
-		protocol = "https"
-	}
-	return EntryEndpoint{Protocol: protocol, Host: options.Server, Port: options.Port}
+	e.endpointOnce.Do(func() {
+		var options struct {
+			Type   string `json:"type"`
+			Server string `json:"server"`
+			Port   uint16 `json:"server_port"`
+			TLS    struct {
+				Enabled bool `json:"enabled"`
+			} `json:"tls"`
+		}
+		_ = json.Unmarshal(e.RawOptions, &options)
+		protocol := options.Type
+		if protocol == "http" && options.TLS.Enabled {
+			protocol = "https"
+		}
+		e.endpoint = EntryEndpoint{Protocol: protocol, Host: options.Server, Port: options.Port}
+	})
+	return e.endpoint
 }
 
 func (e *NodeEntry) Inspection() Inspection {
@@ -116,7 +119,13 @@ func (e *NodeEntry) RestoreInspection(data string) error {
 
 // CurrentAttributes rejects data for a previous exit or an expired source sample.
 func (e *NodeEntry) CurrentAttributes(ttl time.Duration) *EgressAttributes {
-	attributes := e.Inspection().Attributes
+	e.mu.RLock()
+	var attributes *EgressAttributes
+	if e.inspection.Attributes != nil {
+		copy := *e.inspection.Attributes
+		attributes = &copy
+	}
+	e.mu.RUnlock()
 	if attributes == nil || attributes.IP != e.GetEgressIP().String() {
 		return nil
 	}
@@ -127,7 +136,9 @@ func (e *NodeEntry) CurrentAttributes(ttl time.Duration) *EgressAttributes {
 }
 
 func (e *NodeEntry) EntryIPs() []string {
-	ips := e.Inspection().EntryIPs
+	e.mu.RLock()
+	ips := append([]string{}, e.inspection.EntryIPs...)
+	e.mu.RUnlock()
 	if len(ips) == 0 {
 		if ip, err := netip.ParseAddr(e.Endpoint().Host); err == nil {
 			return []string{ip.String()}

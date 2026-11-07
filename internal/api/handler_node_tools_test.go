@@ -65,7 +65,7 @@ func TestNodeInspection_FilterEgressExportAndBatch(t *testing.T) {
 	}
 	for _, format := range []string{"txt", "base64", "csv", "json", "sing-box", "clash"} {
 		t.Run(format, func(t *testing.T) {
-			response := doJSONRequest(t, srv, http.MethodPost, "/api/v1/nodes/export", map[string]any{"format": format, "filters": map[string]any{"network_types": []string{"education"}, "validity": "valid"}, "dedupe_egress": true}, true)
+			response := doJSONRequest(t, srv, http.MethodPost, "/api/v1/nodes/export", map[string]any{"format": format, "filters": map[string]any{"platform_id": "", "subscription_id": "", "company_keyword": "", "region": "", "network_types": []string{"education"}, "validity": "valid"}, "dedupe_egress": true}, true)
 			if response.Code != http.StatusOK {
 				t.Fatalf("export: %d: %s", response.Code, response.Body.String())
 			}
@@ -90,7 +90,7 @@ func TestNodeInspection_FilterEgressExportAndBatch(t *testing.T) {
 	if decodeJSONMap(t, response)["total"] != float64(1) {
 		t.Fatal("missing attributes were treated as hosting=false")
 	}
-	response = doJSONRequest(t, srv, http.MethodPost, "/api/v1/nodes/probe-jobs", map[string]any{"kind": "latency", "filters": map[string]any{"node_hashes": hashes}}, true)
+	response = doJSONRequest(t, srv, http.MethodPost, "/api/v1/nodes/probe-jobs", map[string]any{"kind": "latency", "filters": map[string]any{"node_hashes": append(hashes, hashes[0])}}, true)
 	if response.Code != http.StatusAccepted {
 		t.Fatalf("start batch: %d: %s", response.Code, response.Body.String())
 	}

@@ -100,8 +100,8 @@ function nodeQuery(filters: NodeListQuery): URLSearchParams {
   return query;
 }
 
-export async function listNodes(filters: NodeListQuery): Promise<PageResponse<NodeSummary>> {
-  const data = await apiRequest<PageResponse<ApiNodeSummary>>(`${basePath}?${nodeQuery(filters).toString()}`);
+export async function listNodes(filters: NodeListQuery, signal?: AbortSignal): Promise<PageResponse<NodeSummary>> {
+  const data = await apiRequest<PageResponse<ApiNodeSummary>>(`${basePath}?${nodeQuery(filters).toString()}`, { signal });
   return {
     ...data,
     items: data.items.map(normalizeNode),
@@ -140,8 +140,8 @@ export function checkNodeTarget(hash: string, url: string, expectedStatusCodes: 
 export function probeAttributes(hash: string): Promise<EgressAttributes> {
   return apiRequest(`${basePath}/${hash}/actions/probe-attributes`, { method: "POST" });
 }
-export function listEgresses(filters: NodeListQuery): Promise<PageResponse<EgressSummary>> {
-  return apiRequest(`${basePath}/egresses?${nodeQuery(filters).toString()}`);
+export function listEgresses(filters: NodeListQuery, signal?: AbortSignal): Promise<PageResponse<EgressSummary>> {
+  return apiRequest(`${basePath}/egresses?${nodeQuery(filters).toString()}`, { signal });
 }
 export function exportNodes(format: string, filters: NodeListFilters, dedupeEgress: boolean): Promise<ExportResult> {
   return apiRequest(`${basePath}/export`, { method: "POST", body: { format, filters, dedupe_egress: dedupeEgress } });

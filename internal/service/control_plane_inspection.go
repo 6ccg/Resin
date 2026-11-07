@@ -58,18 +58,6 @@ func matchesIPSearch(value, search string) bool {
 }
 
 func (s *ControlPlaneService) nodeMatchesInspection(entry *node.NodeEntry, filters NodeFilters) bool {
-	if len(filters.NodeHashes) > 0 {
-		found := false
-		for _, hash := range filters.NodeHashes {
-			if hash == entry.Hash.Hex() {
-				found = true
-				break
-			}
-		}
-		if !found {
-			return false
-		}
-	}
 	if filters.EntryKeyword != nil {
 		endpoint := entry.Endpoint()
 		keyword := strings.ToLower(strings.TrimSpace(*filters.EntryKeyword))
@@ -86,11 +74,16 @@ func (s *ControlPlaneService) nodeMatchesInspection(entry *node.NodeEntry, filte
 	if filters.Validity != "" && filters.Validity != "all" && entry.Validity(!s.Pool.IsNodeDisabled(entry.Hash), time.Duration(s.nodeSettings().NodeValidityTTL)) != filters.Validity {
 		return false
 	}
-	region := s.nodeRegion(entry)
-	for _, excluded := range filters.ExcludeRegions {
-		if strings.EqualFold(region, strings.TrimSpace(excluded)) {
-			return false
+	if len(filters.ExcludeRegions) > 0 {
+		region := s.nodeRegion(entry)
+		for _, excluded := range filters.ExcludeRegions {
+			if strings.EqualFold(region, strings.TrimSpace(excluded)) {
+				return false
+			}
 		}
+	}
+	if !filters.HostingUnknown && filters.Hosting == nil && len(filters.NetworkTypes) == 0 && filters.CompanyKeyword == nil && filters.ASNKeyword == nil {
+		return true
 	}
 	attributes := s.currentAttributes(entry)
 	if filters.HostingUnknown {
@@ -162,14 +155,12 @@ func (s *ControlPlaneService) StartBatchProbes(request BatchProbeRequest) (*prob
 	if request.Kind == "targets" && len(s.nodeSettings().ReachabilityTargets) == 0 {
 		return nil, invalidArg("configure reachability_targets first")
 	}
-	nodes, err := s.ListNodes(request.Filters)
+	hashes := make([]node.Hash, 0)
+	err := s.rangeFilteredNodes(request.Filters, func(h node.Hash, _ *node.NodeEntry) {
+		hashes = append(hashes, h)
+	})
 	if err != nil {
 		return nil, err
-	}
-	hashes := make([]node.Hash, 0, len(nodes))
-	for _, entry := range nodes {
-		hash, _ := node.ParseHex(entry.NodeHash)
-		hashes = append(hashes, hash)
 	}
 	result, err := s.ProbeMgr.StartBatch(request.Kind, hashes)
 	if err != nil {
@@ -187,27 +178,27 @@ type EgressSummary struct {
 }
 
 func (s *ControlPlaneService) ListEgresses(filters NodeFilters) ([]EgressSummary, error) {
-	nodes, err := s.ListNodes(filters)
-	if err != nil {
-		return nil, err
-	}
 	groups := make(map[string]*EgressSummary)
-	for _, entry := range nodes {
-		if entry.EgressIP == "" {
-			continue
+	err := s.rangeFilteredNodes(filters, func(h node.Hash, entry *node.NodeEntry) {
+		ip := entry.GetEgressIP()
+		if !ip.IsValid() {
+			return
 		}
-		group := groups[entry.EgressIP]
+		group := groups[ip.String()]
 		if group == nil {
-			group = &EgressSummary{IP: entry.EgressIP, Region: entry.Region}
-			groups[entry.EgressIP] = group
+			group = &EgressSummary{IP: ip.String(), Region: s.nodeRegion(entry)}
+			groups[group.IP] = group
 		}
 		group.Nodes++
-		if entry.Validity == "valid" {
+		if entry.Validity(!s.Pool.IsNodeDisabled(h), time.Duration(s.nodeSettings().NodeValidityTTL)) == "valid" {
 			group.ValidNodes++
 		}
-		if entry.AttributesCurrent && (group.Attributes == nil || entry.Attributes.CheckedAt.After(group.Attributes.CheckedAt)) {
-			group.Attributes = entry.Attributes
+		if attributes := s.currentAttributes(entry); attributes != nil && (group.Attributes == nil || attributes.CheckedAt.After(group.Attributes.CheckedAt)) {
+			group.Attributes = attributes
 		}
+	})
+	if err != nil {
+		return nil, err
 	}
 	result := make([]EgressSummary, 0, len(groups))
 	for _, group := range groups {
