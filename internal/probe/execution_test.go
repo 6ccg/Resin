@@ -45,6 +45,52 @@ func TestCancelledProbeWaitDoesNotFailNode(t *testing.T) {
 	}
 }
 
+func TestEntryResolutionRunsInsideProbeBudget(t *testing.T) {
+	pool := topology.NewGlobalNodePool(topology.PoolConfig{MaxConsecutiveFailures: func() int { return 3 }})
+	var hashes []node.Hash
+	for _, raw := range []string{`{"type":"http","server":"entry.example","server_port":8080}`, `{"type":"http","server":"other.example","server_port":8080}`} {
+		h := node.HashFromRawOptions([]byte(raw))
+		pool.AddNodeFromSub(h, []byte(raw), "sub")
+		e, _ := pool.GetEntry(h)
+		storeOutbound(e)
+		hashes = append(hashes, h)
+	}
+	cfg := config.NewDefaultRuntimeConfig()
+	cfg.ProbeConcurrency = 1
+	started, release, fetched := make(chan struct{}), make(chan struct{}), make(chan struct{}, 2)
+	var once sync.Once
+	defer once.Do(func() { close(release) })
+	manager := NewProbeManager(ProbeConfig{Pool: pool, RuntimeConfig: func() *config.RuntimeConfig { return cfg }, ResolveEntry: func(string) ([]string, error) { close(started); <-release; return []string{"203.0.113.10"}, nil }, Fetcher: func(node.Hash, string) ([]byte, time.Duration, error) {
+		fetched <- struct{}{}
+		return []byte("ip=203.0.113.20"), time.Millisecond, nil
+	}})
+	defer manager.Stop()
+	done := make(chan error, 2)
+	go func() { _, err := manager.ProbeEgressSync(hashes[0]); done <- err }()
+	select {
+	case <-started:
+	case <-time.After(time.Second):
+		t.Fatal("entry resolution did not start")
+	}
+	go func() { _, err := manager.ProbeLatencySync(hashes[1]); done <- err }()
+	select {
+	case <-fetched:
+		t.Fatal("entry DNS resolution bypassed the global probe budget")
+	case <-time.After(50 * time.Millisecond):
+	}
+	once.Do(func() { close(release) })
+	for i := 0; i < 2; i++ {
+		select {
+		case err := <-done:
+			if err != nil {
+				t.Fatal(err)
+			}
+		case <-time.After(time.Second):
+			t.Fatal("probe did not finish")
+		}
+	}
+}
+
 func TestManualProbesRespectGlobalAndPerNodeLimits(t *testing.T) {
 	for _, tc := range []struct {
 		name                 string

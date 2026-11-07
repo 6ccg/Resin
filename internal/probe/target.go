@@ -15,7 +15,7 @@ func (m *ProbeManager) TriggerTargetProbes(hash node.Hash) bool {
 // ProbeTargetSync observes an application target independently of node health.
 // A blocked target must not open the global node circuit breaker.
 func (m *ProbeManager) ProbeTargetSync(hash node.Hash, target string, expectedStatuses []int) (*node.ProbeObservation, error) {
-	return m.probeTargetSync(context.Background(), false, hash, target, expectedStatuses)
+	return m.probeTargetSync(context.Background(), true, hash, target, expectedStatuses)
 }
 
 func (m *ProbeManager) probeTargetSync(ctx context.Context, batch bool, hash node.Hash, target string, expectedStatuses []int) (*node.ProbeObservation, error) {

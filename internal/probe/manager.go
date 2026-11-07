@@ -368,7 +368,7 @@ type EgressProbeResult struct {
 // ProbeEgressSync performs a blocking egress probe and returns the results.
 // Used by API action endpoints that must return probe data synchronously.
 func (m *ProbeManager) ProbeEgressSync(hash node.Hash) (*EgressProbeResult, error) {
-	return m.probeEgressSync(context.Background(), false, hash)
+	return m.probeEgressSync(context.Background(), true, hash)
 }
 
 func (m *ProbeManager) probeEgressSync(ctx context.Context, batch bool, hash node.Hash) (*EgressProbeResult, error) {
@@ -380,6 +380,7 @@ func (m *ProbeManager) probeEgressSync(ctx context.Context, batch bool, hash nod
 		return nil, err
 	}
 	defer release()
+	m.refreshEntry(hash, entry)
 
 	// Record synchronous probe attempts for metrics parity with async paths.
 	if m.onProbeEvent != nil {
@@ -416,7 +417,7 @@ type LatencyProbeResult struct {
 
 // ProbeLatencySync performs a blocking latency probe and returns the results.
 func (m *ProbeManager) ProbeLatencySync(hash node.Hash) (*LatencyProbeResult, error) {
-	return m.probeLatencySync(context.Background(), false, hash)
+	return m.probeLatencySync(context.Background(), true, hash)
 }
 
 func (m *ProbeManager) probeLatencySync(ctx context.Context, batch bool, hash node.Hash) (*LatencyProbeResult, error) {
@@ -833,6 +834,7 @@ func (m *ProbeManager) probeEgress(hash node.Hash, entry *node.NodeEntry) {
 	if entry.Outbound.Load() == nil {
 		return
 	}
+	m.refreshEntry(hash, entry)
 
 	// Always record the probe attempt (success or failure).
 	if m.onProbeEvent != nil {

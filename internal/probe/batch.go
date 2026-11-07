@@ -100,7 +100,6 @@ func (m *ProbeManager) StartBatch(kind string, hashes []node.Hash) (*BatchStatus
 						case "latency":
 							_, err = m.probeLatencySync(ctx, true, hash)
 						case "egress":
-							m.refreshEntry(hash, entry)
 							_, err = m.probeEgressSync(ctx, true, hash)
 						case "attributes":
 							_, err = m.probeAttributesSync(ctx, true, hash)

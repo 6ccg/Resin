@@ -156,7 +156,7 @@ func (m *ProbeManager) refreshEntry(hash node.Hash, entry *node.NodeEntry) {
 }
 
 func (m *ProbeManager) ProbeAttributesSync(hash node.Hash) (*node.EgressAttributes, error) {
-	return m.probeAttributesSync(context.Background(), false, hash)
+	return m.probeAttributesSync(context.Background(), true, hash)
 }
 
 func (m *ProbeManager) probeAttributesSync(ctx context.Context, batch bool, hash node.Hash) (*node.EgressAttributes, error) {
