@@ -1,6 +1,7 @@
 package probe
 
 import (
+	"context"
 	"fmt"
 	"time"
 
@@ -14,6 +15,19 @@ func (m *ProbeManager) TriggerTargetProbes(hash node.Hash) bool {
 // ProbeTargetSync observes an application target independently of node health.
 // A blocked target must not open the global node circuit breaker.
 func (m *ProbeManager) ProbeTargetSync(hash node.Hash, target string, expectedStatuses []int) (*node.ProbeObservation, error) {
+	return m.probeTargetSync(context.Background(), false, hash, target, expectedStatuses)
+}
+
+func (m *ProbeManager) probeTargetSync(ctx context.Context, batch bool, hash node.Hash, target string, expectedStatuses []int) (*node.ProbeObservation, error) {
+	_, release, err := m.acquireNodeSlot(ctx, batch, hash)
+	if err != nil {
+		return nil, err
+	}
+	defer release()
+	return m.probeTarget(hash, target, expectedStatuses)
+}
+
+func (m *ProbeManager) probeTarget(hash node.Hash, target string, expectedStatuses []int) (*node.ProbeObservation, error) {
 	if m.targetFetcher == nil {
 		return nil, fmt.Errorf("target probe fetcher not configured")
 	}
@@ -21,10 +35,6 @@ func (m *ProbeManager) ProbeTargetSync(hash node.Hash, target string, expectedSt
 	case <-m.stopCh:
 		return nil, fmt.Errorf("probe manager stopped")
 	default:
-	}
-	entry, ok := m.pool.GetEntry(hash)
-	if !ok || !entry.HasOutbound() {
-		return nil, fmt.Errorf("node outbound not ready")
 	}
 	started := time.Now()
 	status, err := m.targetFetcher(hash, target)

@@ -1,6 +1,7 @@
 package probe
 
 import (
+	"encoding/json"
 	"testing"
 	"time"
 
@@ -8,6 +9,45 @@ import (
 	"github.com/Resinat/Resin/internal/node"
 	"github.com/Resinat/Resin/internal/topology"
 )
+
+func TestAttributeFailuresBackOffAndResetOnSuccess(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		failures int
+		age      time.Duration
+		due      bool
+	}{
+		{"first_failure", 1, 90 * time.Second, true},
+		{"repeated_failure", 3, 90 * time.Second, false},
+		{"capped_before_due", 20, 59 * time.Minute, false},
+		{"capped_due", 20, 61 * time.Minute, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			pool := topology.NewGlobalNodePool(topology.PoolConfig{MaxConsecutiveFailures: func() int { return 3 }})
+			hash := node.HashFromRawOptions([]byte(`{"type":"attribute-backoff"}`))
+			pool.AddNodeFromSub(hash, nil, "sub")
+			entry, _ := pool.GetEntry(hash)
+			storeOutbound(entry)
+			entry.CircuitOpenSince.Store(0)
+			attempt := time.Now().Add(-tc.age)
+			data, _ := json.Marshal(node.Inspection{AttributesAttemptAt: &attempt, AttributesError: "provider timeout", AttributesFailures: tc.failures})
+			if err := entry.RestoreInspection(string(data)); err != nil {
+				t.Fatal(err)
+			}
+			cfg := config.NewDefaultRuntimeConfig()
+			manager := NewProbeManager(ProbeConfig{Pool: pool, RuntimeConfig: func() *config.RuntimeConfig { return cfg }})
+			defer manager.Stop()
+			manager.scanAttributes()
+			if got := manager.taskQueue.normal.len() > 0; got != tc.due {
+				t.Fatalf("scheduled=%v, want %v", got, tc.due)
+			}
+			entry.SetAttributes(&node.EgressAttributes{}, nil)
+			if entry.Inspection().AttributesFailures != 0 {
+				t.Fatal("successful source response did not reset backoff")
+			}
+		})
+	}
+}
 
 func TestProbeScheduling_KeepaliveAndRecovery(t *testing.T) {
 	for _, test := range []struct {
@@ -21,6 +61,7 @@ func TestProbeScheduling_KeepaliveAndRecovery(t *testing.T) {
 		{"keepalive_due", true, true, false, 0, true},
 		{"failed_backoff", true, false, true, 5, false},
 		{"failed_retry_due", true, false, true, 3, true},
+		{"transient_failure_confirmation_due", true, false, false, 1, true},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			pool := topology.NewGlobalNodePool(topology.PoolConfig{MaxConsecutiveFailures: func() int { return 3 }})
@@ -34,6 +75,7 @@ func TestProbeScheduling_KeepaliveAndRecovery(t *testing.T) {
 			}
 			entry.FailureCount.Store(int32(test.failures))
 			entry.LastLatencyProbeAttempt.Store(time.Now().Add(-90 * time.Second).UnixNano())
+			entry.RecordProbe(node.ProbeObservation{Kind: "latency", Success: !test.broken && test.failures == 0, CheckedAt: time.Now().Add(-90 * time.Second)})
 			cfg := config.NewDefaultRuntimeConfig()
 			cfg.ProbeEnabled = test.enabled
 			cfg.KeepaliveEnabled = test.keepalive
@@ -44,6 +86,23 @@ func TestProbeScheduling_KeepaliveAndRecovery(t *testing.T) {
 				t.Fatalf("scheduled=%v, want %v", got, test.want)
 			}
 		})
+	}
+}
+
+func TestConfirmationIsNotPostponedByPassiveTraffic(t *testing.T) {
+	pool := topology.NewGlobalNodePool(topology.PoolConfig{MaxConsecutiveFailures: func() int { return 3 }})
+	hash := node.HashFromRawOptions([]byte(`{"type":"active-confirmation"}`))
+	pool.AddNodeFromSub(hash, nil, "sub")
+	entry, _ := pool.GetEntry(hash)
+	storeOutbound(entry)
+	entry.CircuitOpenSince.Store(0)
+	entry.RecordProbe(node.ProbeObservation{Kind: "latency", Success: false, CheckedAt: time.Now().Add(-90 * time.Second)})
+	entry.LastLatencyProbeAttempt.Store(time.Now().UnixNano())
+	manager := NewProbeManager(ProbeConfig{Pool: pool})
+	defer manager.Stop()
+	manager.scanLatency()
+	if manager.taskQueue.high.len() != 1 {
+		t.Fatal("recent passive latency postponed a failed active-check confirmation")
 	}
 }
 

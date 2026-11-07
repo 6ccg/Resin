@@ -2,6 +2,7 @@ package probe
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sync"
 	"sync/atomic"
@@ -87,7 +88,7 @@ func (m *ProbeManager) StartBatch(kind string, hashes []node.Hash) (*BatchStatus
 					if index >= len(hashes) {
 						return
 					}
-					if !m.acquireSlot(ctx, true) {
+					if ctx.Err() != nil {
 						return
 					}
 					hash := hashes[index]
@@ -97,15 +98,15 @@ func (m *ProbeManager) StartBatch(kind string, hashes []node.Hash) (*BatchStatus
 					if !skipped {
 						switch kind {
 						case "latency":
-							_, err = m.ProbeLatencySync(hash)
+							_, err = m.probeLatencySync(ctx, true, hash)
 						case "egress":
 							m.refreshEntry(hash, entry)
-							_, err = m.ProbeEgressSync(hash)
+							_, err = m.probeEgressSync(ctx, true, hash)
 						case "attributes":
-							_, err = m.ProbeAttributesSync(hash)
+							_, err = m.probeAttributesSync(ctx, true, hash)
 						case "targets":
 							for _, target := range m.settings().ReachabilityTargets {
-								result, checkErr := m.ProbeTargetSync(hash, target, nil)
+								result, checkErr := m.probeTargetSync(ctx, true, hash, target, nil)
 								if checkErr != nil {
 									err = checkErr
 								} else if !result.Success {
@@ -117,7 +118,9 @@ func (m *ProbeManager) StartBatch(kind string, hashes []node.Hash) (*BatchStatus
 							}
 						}
 					}
-					m.releaseSlot(true)
+					if errors.Is(err, errProbeCancelled) {
+						return
+					}
 					m.jobMu.Lock()
 					job.status.Completed++
 					if skipped {

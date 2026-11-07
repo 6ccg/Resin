@@ -67,7 +67,7 @@ func parseNodeFilters(w http.ResponseWriter, r *http.Request) (service.NodeFilte
 	}
 	filters.Validity = q.Get("validity")
 	switch filters.Validity {
-	case "", "all", "valid", "invalid", "expired", "untested", "disabled", "error":
+	case "", "all", "valid", "unstable", "invalid", "expired", "untested", "disabled", "error":
 	default:
 		writeInvalidArgument(w, "validity: unsupported state")
 		return filters, false

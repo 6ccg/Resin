@@ -368,22 +368,18 @@ type EgressProbeResult struct {
 // ProbeEgressSync performs a blocking egress probe and returns the results.
 // Used by API action endpoints that must return probe data synchronously.
 func (m *ProbeManager) ProbeEgressSync(hash node.Hash) (*EgressProbeResult, error) {
+	return m.probeEgressSync(context.Background(), false, hash)
+}
+
+func (m *ProbeManager) probeEgressSync(ctx context.Context, batch bool, hash node.Hash) (*EgressProbeResult, error) {
 	if m.fetcher == nil {
 		return nil, fmt.Errorf("no probe fetcher configured")
 	}
-	select {
-	case <-m.stopCh:
-		return nil, fmt.Errorf("probe manager stopped")
-	default:
+	entry, release, err := m.acquireNodeSlot(ctx, batch, hash)
+	if err != nil {
+		return nil, err
 	}
-
-	entry, ok := m.pool.GetEntry(hash)
-	if !ok {
-		return nil, fmt.Errorf("node not found")
-	}
-	if entry.Outbound.Load() == nil {
-		return nil, fmt.Errorf("node outbound not ready")
-	}
+	defer release()
 
 	// Record synchronous probe attempts for metrics parity with async paths.
 	if m.onProbeEvent != nil {
@@ -420,22 +416,18 @@ type LatencyProbeResult struct {
 
 // ProbeLatencySync performs a blocking latency probe and returns the results.
 func (m *ProbeManager) ProbeLatencySync(hash node.Hash) (*LatencyProbeResult, error) {
+	return m.probeLatencySync(context.Background(), false, hash)
+}
+
+func (m *ProbeManager) probeLatencySync(ctx context.Context, batch bool, hash node.Hash) (*LatencyProbeResult, error) {
 	if m.fetcher == nil {
 		return nil, fmt.Errorf("no probe fetcher configured")
 	}
-	select {
-	case <-m.stopCh:
-		return nil, fmt.Errorf("probe manager stopped")
-	default:
+	entry, release, err := m.acquireNodeSlot(ctx, batch, hash)
+	if err != nil {
+		return nil, err
 	}
-
-	entry, ok := m.pool.GetEntry(hash)
-	if !ok {
-		return nil, fmt.Errorf("node not found")
-	}
-	if entry.Outbound.Load() == nil {
-		return nil, fmt.Errorf("node outbound not ready")
-	}
+	defer release()
 
 	testURL := m.currentLatencyTestURL()
 	domain := netutil.ExtractDomain(testURL)
@@ -548,12 +540,16 @@ func (m *ProbeManager) scanLatency() {
 			return true // skip nil outbound
 		}
 
-		if entry.IsCircuitOpen() {
-			last := entry.LastLatencyProbeAttempt.Load()
-			if last > 0 && now.Before(time.Unix(0, last).Add(m.recoveryInterval(entry))) {
+		validity := entry.Validity(true, time.Duration(settings.NodeValidityTTL))
+		if entry.IsCircuitOpen() || validity == "unstable" {
+			last := entry.LastConnectivityCheck()
+			if last.IsZero() && entry.LastLatencyProbeAttempt.Load() > 0 {
+				last = time.Unix(0, entry.LastLatencyProbeAttempt.Load())
+			}
+			if !last.IsZero() && now.Before(last.Add(m.recoveryInterval(entry))) {
 				return true
 			}
-		} else if !m.isLatencyProbeDue(entry, now, maxLatencyInterval, maxAuthorityInterval, authorities, lookahead) {
+		} else if validity != "expired" && validity != "untested" && !m.isLatencyProbeDue(entry, now, maxLatencyInterval, maxAuthorityInterval, authorities, lookahead) {
 			return true
 		}
 
@@ -581,20 +577,21 @@ func (m *ProbeManager) runProbeWorker() {
 			continue
 		}
 
-		if m.acquireSlot(context.Background(), false) {
-			m.executeTask(task)
-			m.releaseSlot(false)
-		}
+		m.executeTask(task)
 		m.finishTask(task.key, state)
 	}
 }
 
 func (m *ProbeManager) executeTask(task probeTask) {
-	entry, ok := m.pool.GetEntry(task.key.hash)
-	if !ok || entry.Outbound.Load() == nil {
+	if !m.settings().ProbeEnabled {
 		return
 	}
-	if entry.IsDisabledBySubscriptions(m.pool.MakeSubLookup()) {
+	entry, release, err := m.acquireNodeSlot(context.Background(), false, task.key.hash)
+	if err != nil {
+		return
+	}
+	defer release()
+	if !m.settings().ProbeEnabled || entry.IsDisabledBySubscriptions(m.pool.MakeSubLookup()) {
 		return
 	}
 
@@ -614,17 +611,20 @@ func (m *ProbeManager) executeTask(task probeTask) {
 					return
 				default:
 				}
-				if _, err := m.ProbeTargetSync(task.key.hash, target, nil); err != nil {
+				if _, err := m.probeTarget(task.key.hash, target, nil); err != nil {
 					log.Printf("[probe] target check for %s: %v", task.key.hash.Hex(), err)
 				}
 			}
 		}
 	case probeTaskKindAttributes:
-		_, _ = m.ProbeAttributesSync(task.key.hash)
+		_, _ = m.probeAttributes(task.key.hash, entry)
 	}
 }
 
 func (m *ProbeManager) enqueueProbe(hash node.Hash, kind probeTaskKind, priority probePriority) bool {
+	if !m.settings().ProbeEnabled {
+		return false
+	}
 	return m.enqueueTask(hash, kind, priority, true)
 }
 
@@ -889,16 +889,18 @@ func (m *ProbeManager) performEgressProbe(hash node.Hash) (netip.Addr, egressPro
 		return netip.Addr{}, egressProbeFetchError, err
 	}
 
-	m.pool.RecordResult(hash, true)
-	if latency > 0 {
-		m.pool.RecordLatency(hash, egressTraceDomain, &latency)
-	}
-
 	ip, loc, err := ParseCloudflareTrace(body)
 	if err != nil {
+		// A target response without exit metadata neither confirms recovery nor
+		// proves the proxy is unavailable. Preserve connectivity health.
+		observation.Kind = "egress_metadata"
 		observation.Error = err.Error()
 		m.pool.UpdateNodeEgressIP(hash, nil, nil)
 		return netip.Addr{}, egressProbeParseError, err
+	}
+	m.pool.RecordResult(hash, true)
+	if latency > 0 {
+		m.pool.RecordLatency(hash, egressTraceDomain, &latency)
 	}
 	m.pool.UpdateNodeEgressIP(hash, &ip, loc)
 	observation.Success = true

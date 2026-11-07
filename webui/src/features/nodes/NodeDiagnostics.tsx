@@ -44,12 +44,12 @@ export function NodeDiagnosticsPanel({ hash, ready }: { hash: string; ready: boo
     },
   });
   const stats = diagnostics.data?.stability;
-  const checks = diagnostics.data?.checks.filter((sample) => scope === "all" || (scope === "target" ? sample.kind === "target" : sample.kind !== "target")) ?? [];
+  const checks = diagnostics.data?.checks.filter((sample) => scope === "all" || (scope === "general" ? sample.kind === "latency" || sample.kind === "egress" : sample.kind === scope)) ?? [];
   const columns = [
     col.accessor("checked_at", { header: t("检测时间"), cell: (info) => formatDateTime(info.getValue()) }),
     col.accessor("kind", {
       header: t("检测类型"),
-      cell: (info) => info.getValue() === "target" ? t("指定目标") : info.getValue() === "egress" ? t("出口探测") : t("延迟探测"),
+      cell: (info) => info.getValue() === "target" ? t("指定目标") : info.getValue() === "egress_metadata" ? t("出口解析") : info.getValue() === "egress" ? t("出口探测") : t("延迟探测"),
     }),
     col.accessor("target", { header: t("检测目标"), cell: (info) => <span title={info.getValue()}>{info.getValue()}</span> }),
     col.accessor("success", {
@@ -103,6 +103,7 @@ export function NodeDiagnosticsPanel({ hash, ready }: { hash: string; ready: boo
           <option value="all">{t("全部检测")}</option>
           <option value="general">{t("通用探活")}</option>
           <option value="target">{t("指定目标")}</option>
+          <option value="egress_metadata">{t("出口解析")}</option>
         </Select>
       </div>
       <DataTable data={checks} columns={columns} />
