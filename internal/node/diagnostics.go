@@ -37,10 +37,25 @@ type ProbeDiagnostics struct {
 	Checks    []ProbeObservation `json:"checks"`
 }
 
+// Keep the latest connectivity result with the node so periodic scans need
+// not read the backing array of the full diagnostic history.
+type connectivityCheck struct {
+	checkedAt time.Time
+	success   bool
+	present   bool
+}
+
 func (e *NodeEntry) RecordProbe(observation ProbeObservation) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	general := isGeneralProbe(observation.Kind)
+	if general {
+		e.lastConnectivity = connectivityCheck{
+			checkedAt: observation.CheckedAt,
+			success:   observation.Success,
+			present:   true,
+		}
+	}
 	count := 0
 	oldest := -1
 	// The same target and failure are often recorded dozens of times for a node.
@@ -117,12 +132,7 @@ func (e *NodeEntry) ProbeStability() ProbeStability {
 func (e *NodeEntry) LastConnectivityCheck() time.Time {
 	e.mu.RLock()
 	defer e.mu.RUnlock()
-	for i := len(e.probeHistory) - 1; i >= 0; i-- {
-		if isGeneralProbe(e.probeHistory[i].Kind) {
-			return e.probeHistory[i].CheckedAt
-		}
-	}
-	return time.Time{}
+	return e.lastConnectivity.checkedAt
 }
 
 func isGeneralProbe(kind string) bool { return kind == "latency" || kind == "egress" }

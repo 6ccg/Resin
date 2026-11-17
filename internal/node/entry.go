@@ -44,11 +44,12 @@ type NodeEntry struct {
 	probeGate    chan struct{}
 
 	// --- Dynamic (guarded by mu) ---
-	mu              sync.RWMutex
-	subscriptionIDs []string
-	LastError       string
-	probeHistory    []ProbeObservation
-	inspection      Inspection
+	mu               sync.RWMutex
+	subscriptionIDs  []string
+	LastError        string
+	probeHistory     []ProbeObservation
+	lastConnectivity connectivityCheck
+	inspection       Inspection
 
 	// Atomic dynamic fields for concurrent hot-path reads.
 	FailureCount         atomic.Int32

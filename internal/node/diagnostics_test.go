@@ -8,13 +8,14 @@ import (
 
 func TestDiagnostics_StabilityExcludesTargetsAndRestores(t *testing.T) {
 	entry := NewNodeEntry(Hash{}, nil, time.Now(), 0)
-	for _, sample := range []ProbeObservation{
+	start := time.Now()
+	for i, sample := range []ProbeObservation{
 		{Kind: "latency", Success: true, DurationMs: 100},
 		{Kind: "egress", Success: true, DurationMs: 300},
 		{Kind: "latency", Success: false},
 		{Kind: "target", Success: true},
 	} {
-		sample.CheckedAt = time.Now()
+		sample.CheckedAt = start.Add(time.Duration(i) * time.Second)
 		entry.RecordProbe(sample)
 	}
 	restored := NewNodeEntry(Hash{}, nil, time.Now(), 0)
@@ -28,8 +29,12 @@ func TestDiagnostics_StabilityExcludesTargetsAndRestores(t *testing.T) {
 	if math.Abs(stats.SuccessRate-2.0/3) > 1e-9 || stats.AverageDurationMs != 200 || stats.DurationStddevMs != 100 {
 		t.Fatalf("incorrect rate or duration statistics: %+v", stats)
 	}
-	if restored.Diagnostics().Checks[0].Kind != "target" {
+	checks := restored.Diagnostics().Checks
+	if checks[0].Kind != "target" {
 		t.Fatal("history must list most recent checks first")
+	}
+	if got := restored.LastConnectivityCheck(); !got.Equal(checks[1].CheckedAt) {
+		t.Fatalf("last connectivity check = %v, want %v", got, checks[1].CheckedAt)
 	}
 }
 
