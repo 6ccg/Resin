@@ -862,19 +862,16 @@ func restoreBootstrapNodeDynamics(
 	engine *state.StateEngine,
 	pool *topology.GlobalNodePool,
 ) error {
-	dynamics, err := engine.LoadAllNodesDynamic()
-	if err != nil {
-		return fmt.Errorf("load nodes_dynamic: %w", err)
-	}
-
-	for _, nd := range dynamics {
+	count := 0
+	err := engine.VisitNodesDynamic(func(nd model.NodeDynamic) error {
+		count++
 		hash, err := node.ParseHex(nd.Hash)
 		if err != nil {
-			continue
+			return nil
 		}
 		entry, ok := pool.GetEntry(hash)
 		if !ok {
-			continue
+			return nil
 		}
 		entry.FailureCount.Store(int32(nd.FailureCount))
 		entry.RecoverySuccessCount.Store(int32(nd.RecoverySuccessCount))
@@ -895,8 +892,12 @@ func restoreBootstrapNodeDynamics(
 		}
 		entry.SetEgressRegion(nd.EgressRegion)
 		entry.LastEgressUpdate.Store(nd.EgressUpdatedAtNs)
+		return nil
+	})
+	if err != nil {
+		return fmt.Errorf("load nodes_dynamic: %w", err)
 	}
-	log.Printf("Loaded %d node dynamic states from cache.db", len(dynamics))
+	log.Printf("Loaded %d node dynamic states from cache.db", count)
 	return nil
 }
 

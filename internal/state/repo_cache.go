@@ -110,16 +110,25 @@ func (r *CacheRepo) BulkDeleteNodesDynamic(hashes []string) error {
 
 // LoadAllNodesDynamic reads all node dynamic records.
 func (r *CacheRepo) LoadAllNodesDynamic() ([]model.NodeDynamic, error) {
+	var result []model.NodeDynamic
+	err := r.VisitNodesDynamic(func(n model.NodeDynamic) error {
+		result = append(result, n)
+		return nil
+	})
+	return result, err
+}
+
+// VisitNodesDynamic lets startup restore each node before reading the next history.
+func (r *CacheRepo) VisitNodesDynamic(visit func(model.NodeDynamic) error) error {
 	rows, err := r.db.Query(`
 		SELECT hash, failure_count, circuit_open_since, egress_ip, egress_region, egress_updated_at_ns,
 		       last_latency_probe_attempt_ns, last_authority_latency_probe_attempt_ns, last_egress_update_attempt_ns, probe_history_json, inspection_json, recovery_success_count
 		FROM nodes_dynamic`)
 	if err != nil {
-		return nil, err
+		return err
 	}
 	defer rows.Close()
 
-	var result []model.NodeDynamic
 	for rows.Next() {
 		var n model.NodeDynamic
 		if err := rows.Scan(
@@ -136,11 +145,13 @@ func (r *CacheRepo) LoadAllNodesDynamic() ([]model.NodeDynamic, error) {
 			&n.InspectionJSON,
 			&n.RecoverySuccessCount,
 		); err != nil {
-			return nil, err
+			return err
 		}
-		result = append(result, n)
+		if err := visit(n); err != nil {
+			return err
+		}
 	}
-	return result, rows.Err()
+	return rows.Err()
 }
 
 // --- node_latency ---

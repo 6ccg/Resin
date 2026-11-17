@@ -171,18 +171,14 @@ func (e *NodeEntry) Validity(enabled bool, ttl time.Duration) string {
 	}
 	e.mu.RLock()
 	defer e.mu.RUnlock()
-	for i := len(e.probeHistory) - 1; i >= 0; i-- {
-		sample := e.probeHistory[i]
-		if sample.Kind != "latency" && sample.Kind != "egress" {
-			continue
-		}
+	if sample := e.lastConnectivity; sample.present {
 		if e.IsCircuitOpen() {
 			return "invalid"
 		}
-		if !sample.Success || e.FailureCount.Load() > 0 {
+		if !sample.success || e.FailureCount.Load() > 0 {
 			return "unstable"
 		}
-		if time.Since(sample.CheckedAt) > ttl {
+		if time.Since(sample.checkedAt) > ttl {
 			return "expired"
 		}
 		return "valid"
