@@ -1031,6 +1031,7 @@ func TestAPIContract_SystemConfigPatchSemantics(t *testing.T) {
 
 	rec := doJSONRequest(t, srv, http.MethodPatch, "/api/v1/system/config", map[string]any{
 		"request_log_enabled":                     true,
+		"allow_insecure_proxy_tls":                true,
 		"reverse_proxy_log_req_headers_max_bytes": 2048,
 		"p2c_latency_window":                      "7m",
 		"cache_flush_interval":                    "30s",
@@ -1042,6 +1043,9 @@ func TestAPIContract_SystemConfigPatchSemantics(t *testing.T) {
 	body := decodeJSONMap(t, rec)
 	if body["request_log_enabled"] != true {
 		t.Fatalf("request_log_enabled: got %v, want true", body["request_log_enabled"])
+	}
+	if body["allow_insecure_proxy_tls"] != true || !runtimeCfg.Load().AllowInsecureProxyTLS {
+		t.Fatal("runtime entry TLS setting was not updated")
 	}
 	if body["reverse_proxy_log_req_headers_max_bytes"] != float64(2048) {
 		t.Fatalf("reverse_proxy_log_req_headers_max_bytes: got %v", body["reverse_proxy_log_req_headers_max_bytes"])

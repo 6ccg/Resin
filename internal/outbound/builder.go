@@ -29,6 +29,8 @@ type SingboxBuilderConfig struct {
 	// DNSUpstreams configures Resin's node DNS chain.
 	// Values are DNS upstream URI strings and the slice must not be empty.
 	DNSUpstreams []string
+	// AllowInsecureProxyTLS controls verification for new TLS connections to proxies.
+	AllowInsecureProxyTLS func() bool
 }
 
 // ---------------------------------------------------------------------------
@@ -39,11 +41,12 @@ type SingboxBuilderConfig struct {
 // It holds a fully-wired context with DNS services so that domain-based
 // outbound servers can be resolved.
 type SingboxBuilder struct {
-	registry            *sbOutbound.Registry
-	ctx                 context.Context
-	logFactory          log.Factory
-	dnsTransportManager *dns.TransportManager
-	dnsRouter           *dns.Router
+	registry              *sbOutbound.Registry
+	ctx                   context.Context
+	logFactory            log.Factory
+	dnsTransportManager   *dns.TransportManager
+	dnsRouter             *dns.Router
+	allowInsecureProxyTLS func() bool
 }
 
 // NewSingboxBuilderWithConfig creates a SingboxBuilder with a complete
@@ -117,11 +120,12 @@ func NewSingboxBuilderWithConfig(cfg SingboxBuilderConfig) (*SingboxBuilder, err
 	registry := service.FromContext[adapter.OutboundRegistry](ctx).(*sbOutbound.Registry)
 
 	return &SingboxBuilder{
-		registry:            registry,
-		ctx:                 ctx,
-		logFactory:          logFactory,
-		dnsTransportManager: dnsTransportMgr,
-		dnsRouter:           dnsRouter,
+		registry:              registry,
+		ctx:                   ctx,
+		logFactory:            logFactory,
+		dnsTransportManager:   dnsTransportMgr,
+		dnsRouter:             dnsRouter,
+		allowInsecureProxyTLS: cfg.AllowInsecureProxyTLS,
 	}, nil
 }
 
@@ -129,14 +133,52 @@ func NewSingboxBuilderWithConfig(cfg SingboxBuilderConfig) (*SingboxBuilder, err
 // type/tag fields) into a real adapter.Outbound and runs it through the
 // lifecycle stages.
 func (b *SingboxBuilder) Build(rawOptions json.RawMessage) (adapter.Outbound, error) {
-	// 1. Parse via official option.Outbound path (strips type/tag, creates
-	//    typed options via OutboundOptionsRegistry + badjson.UnmarshallExcluded).
-	var outboundConfig option.Outbound
-	if err := sJson.UnmarshalContext(b.ctx, rawOptions, &outboundConfig); err != nil {
-		return nil, fmt.Errorf("parse outbound options: %w", err)
+	outboundConfig, err := b.parseOptions(rawOptions)
+	if err != nil {
+		return nil, err
+	}
+	tlsOptions := outboundTLSOptions(outboundConfig)
+	if b.allowInsecureProxyTLS == nil || tlsOptions == nil || !tlsOptions.Enabled || tlsOptions.Insecure {
+		return b.build(outboundConfig)
 	}
 
-	// 2. Create the outbound instance via the registry.
+	insecure := b.allowInsecureProxyTLS()
+	tlsOptions.Insecure = insecure
+	initial, err := b.build(outboundConfig)
+	if err != nil {
+		return nil, err
+	}
+	return &entryTLSOutbound{
+		Outbound:        initial,
+		initialInsecure: insecure,
+		allowInsecure:   b.allowInsecureProxyTLS,
+		buildAlternate: func() (adapter.Outbound, error) {
+			alternate, err := b.parseOptions(rawOptions)
+			if err != nil {
+				return nil, err
+			}
+			outboundTLSOptions(alternate).Insecure = !insecure
+			return b.build(alternate)
+		},
+	}, nil
+}
+
+func outboundTLSOptions(outboundConfig option.Outbound) *option.OutboundTLSOptions {
+	if wrapper, ok := outboundConfig.Options.(option.OutboundTLSOptionsWrapper); ok {
+		return wrapper.TakeOutboundTLSOptions()
+	}
+	return nil
+}
+
+func (b *SingboxBuilder) parseOptions(rawOptions json.RawMessage) (option.Outbound, error) {
+	var outboundConfig option.Outbound
+	if err := sJson.UnmarshalContext(b.ctx, rawOptions, &outboundConfig); err != nil {
+		return option.Outbound{}, fmt.Errorf("parse outbound options: %w", err)
+	}
+	return outboundConfig, nil
+}
+
+func (b *SingboxBuilder) build(outboundConfig option.Outbound) (adapter.Outbound, error) {
 	logger := b.logFactory.NewLogger("outbound/" + outboundConfig.Type)
 	ob, err := b.registry.CreateOutbound(
 		b.ctx,

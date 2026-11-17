@@ -13,6 +13,9 @@ type RuntimeConfig struct {
 	ReverseProxyLogRespHeadersMaxBytes int  `json:"reverse_proxy_log_resp_headers_max_bytes"`
 	ReverseProxyLogRespBodyMaxBytes    int  `json:"reverse_proxy_log_resp_body_max_bytes"`
 
+	// Proxy entry TLS. Per-node insecure options still apply when disabled.
+	AllowInsecureProxyTLS bool `json:"allow_insecure_proxy_tls"`
+
 	// Health check
 	MaxConsecutiveFailures          int      `json:"max_consecutive_failures"`
 	MaxLatencyTestInterval          Duration `json:"max_latency_test_interval"`

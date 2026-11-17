@@ -80,6 +80,8 @@ const EXACT_ZH_TO_EN: Record<string, string> = {
   "此属性样本已过期或属于其他出口/来源；筛选和导出会视为未知，请重新检测。": "This sample is expired or belongs to another exit/source. Filters and exports treat it as unknown; run a new check.",
   "入口解析 IP 是 DNS 解析快照；出口 IP 是通过该节点访问检测服务的实测结果。": "Entry IPs are a DNS resolution snapshot. Exit IPs are measured by requesting the detection service through this node.",
   "启用定期探活": "Enable Periodic Health Checks",
+  "全局跳过代理入口证书校验": "Skip certificate verification for all proxy entries",
+  "保存后对新建的代理入口 TLS 连接生效。访问目标网站时仍校验证书。": "Applies to new TLS connections to proxy entries after saving. Website certificates are still verified.",
   "探测并发数": "Probe Concurrency",
   "探测超时": "Probe Timeout",
   "启用持续保活": "Enable Continuous Keepalive",

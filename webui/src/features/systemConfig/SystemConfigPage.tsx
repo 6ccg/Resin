@@ -30,6 +30,7 @@ type RuntimeConfigForm = {
   latency_authorities_raw: string;
   reachability_targets_raw: string;
   probe_enabled: boolean;
+  allow_insecure_proxy_tls: boolean;
   probe_concurrency: string;
   probe_timeout: string;
   keepalive_enabled: boolean;
@@ -62,6 +63,7 @@ const EDITABLE_FIELDS: Array<keyof RuntimeConfig> = [
   "latency_test_url",
   "latency_authorities",
   "reachability_targets",
+  "allow_insecure_proxy_tls",
   "probe_enabled", "probe_concurrency", "probe_timeout", "keepalive_enabled", "keepalive_interval",
   "recovery_probe_interval", "recovery_probe_max_interval", "recovery_success_threshold", "node_validity_ttl",
   "egress_attributes_enabled", "egress_attributes_provider", "egress_attributes_url", "egress_attributes_interval",
@@ -86,6 +88,7 @@ const FIELD_LABELS: Record<keyof RuntimeConfig, string> = {
   latency_authorities: "延迟测试权威域名列表",
   reachability_targets: "指定目标可达性",
   probe_enabled: "启用定期探活",
+  allow_insecure_proxy_tls: "全局跳过代理入口证书校验",
   probe_concurrency: "探测并发数",
   probe_timeout: "探测超时",
   keepalive_enabled: "启用持续保活",
@@ -143,6 +146,7 @@ function configToForm(config: RuntimeConfig): RuntimeConfigForm {
     latency_authorities_raw: config.latency_authorities.join("\n"),
     reachability_targets_raw: config.reachability_targets.join("\n"),
     probe_enabled: config.probe_enabled,
+    allow_insecure_proxy_tls: config.allow_insecure_proxy_tls,
     probe_concurrency: String(config.probe_concurrency),
     probe_timeout: config.probe_timeout,
     keepalive_enabled: config.keepalive_enabled,
@@ -207,6 +211,7 @@ function parseForm(form: RuntimeConfigForm): RuntimeConfig {
   return {
     request_log_enabled: form.request_log_enabled,
     probe_enabled: form.probe_enabled,
+    allow_insecure_proxy_tls: form.allow_insecure_proxy_tls,
     probe_concurrency: parseNonNegativeInt("探测并发数", form.probe_concurrency),
     probe_timeout: form.probe_timeout.trim(),
     keepalive_enabled: form.keepalive_enabled,
@@ -641,6 +646,14 @@ export function SystemConfigPage() {
               <section className="syscfg-section">
                 <h4>{t("探测与路由")}</h4>
                 <div className="form-grid">
+                  <div className="field-group field-span-2">
+                    <div style={{ display: "flex", alignItems: "center" }}>
+                      <label className="field-label" htmlFor="sys-proxy-tls" style={{ margin: 0 }}>{t(FIELD_LABELS.allow_insecure_proxy_tls)}</label>
+                      {renderRestoreButton("allow_insecure_proxy_tls")}
+                    </div>
+                    <Switch id="sys-proxy-tls" checked={form.allow_insecure_proxy_tls} onChange={(event) => setFormField("allow_insecure_proxy_tls", event.target.checked)} />
+                    <p className="muted">{t("保存后对新建的代理入口 TLS 连接生效。访问目标网站时仍校验证书。")}</p>
+                  </div>
                   {PROBE_SETTING_FIELDS.map((key) => (
                     <div className="field-group" key={key}>
                       <div style={{ display: "flex", alignItems: "center" }}>

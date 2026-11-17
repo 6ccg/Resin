@@ -13,6 +13,7 @@ export type RuntimeConfig = {
   latency_authorities: string[];
   reachability_targets: string[];
   probe_enabled: boolean;
+  allow_insecure_proxy_tls: boolean;
   probe_concurrency: number;
   probe_timeout: string;
   keepalive_enabled: boolean;

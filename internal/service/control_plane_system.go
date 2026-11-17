@@ -79,6 +79,7 @@ var runtimeConfigAllowedFields = map[string]bool{
 	"reverse_proxy_log_req_body_max_bytes":     true,
 	"reverse_proxy_log_resp_headers_max_bytes": true,
 	"reverse_proxy_log_resp_body_max_bytes":    true,
+	"allow_insecure_proxy_tls":                 true,
 	"max_consecutive_failures":                 true,
 	"max_latency_test_interval":                true,
 	"max_authority_latency_test_interval":      true,

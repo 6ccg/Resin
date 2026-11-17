@@ -243,6 +243,9 @@ func newTopologyRuntime(
 
 	singboxBuilder, err := outbound.NewSingboxBuilderWithConfig(outbound.SingboxBuilderConfig{
 		DNSUpstreams: envCfg.NodeDNSUpstreams,
+		AllowInsecureProxyTLS: func() bool {
+			return runtimeConfigSnapshot(runtimeCfg).AllowInsecureProxyTLS
+		},
 	})
 	if err != nil {
 		return nil, fmt.Errorf("singbox builder: %w", err)

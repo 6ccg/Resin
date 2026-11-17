@@ -22,6 +22,7 @@ const DEFAULT_CONFIG: RuntimeConfig = {
   latency_authorities: [],
   reachability_targets: [],
   probe_enabled: true,
+  allow_insecure_proxy_tls: false,
   probe_concurrency: 32,
   probe_timeout: "15s",
   keepalive_enabled: false,
@@ -62,6 +63,7 @@ function normalizeRuntimeConfig(raw: Partial<RuntimeConfig> | null | undefined):
 
   return {
     probe_enabled: raw.probe_enabled ?? true,
+    allow_insecure_proxy_tls: raw.allow_insecure_proxy_tls ?? false,
     probe_concurrency: asNumber(raw.probe_concurrency, 32),
     probe_timeout: asString(raw.probe_timeout, "15s"),
     keepalive_enabled: raw.keepalive_enabled ?? false,
