@@ -1,4 +1,6 @@
 import react from "@vitejs/plugin-react";
+import { readFile, writeFile } from "node:fs/promises";
+import { join } from "node:path";
 import { gzipSync } from "node:zlib";
 import { defineConfig, loadEnv } from "vite";
 
@@ -13,13 +15,16 @@ export default defineConfig(({ mode }) => {
       {
         name: "resin-gzip-assets",
         apply: "build",
-        generateBundle(_options, bundle) {
-          for (const output of Object.values(bundle)) {
-            if (!output.fileName.startsWith("assets/") || !/\.(js|css|svg|json)$/.test(output.fileName)) continue;
-            const source = output.type === "chunk" ? output.code : output.source;
+        async writeBundle(options, bundle) {
+          if (!options.dir) return;
+          for (const name of Object.keys(bundle)) {
+            if (!name.startsWith("assets/") || !/\.(js|css|svg|json)$/.test(name)) continue;
+            // Vite can rewrite generated assets before writing them to disk.
+            const file = join(options.dir, name);
+            const source = await readFile(file);
             const gzip = gzipSync(source);
-            if (gzip.length < Buffer.byteLength(source)) {
-              this.emitFile({ type: "asset", fileName: `${output.fileName}.gz`, source: gzip });
+            if (gzip.length < source.length) {
+              await writeFile(file + ".gz", gzip);
             }
           }
         },
