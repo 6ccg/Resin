@@ -42,18 +42,31 @@ func (e *NodeEntry) RecordProbe(observation ProbeObservation) {
 	defer e.mu.Unlock()
 	general := isGeneralProbe(observation.Kind)
 	count := 0
-	for _, sample := range e.probeHistory {
+	oldest := -1
+	// The same target and failure are often recorded dozens of times for a node.
+	// Reuse the existing strings for both restored and newly recorded history.
+	needKind, needTarget, needError := observation.Kind != "", observation.Target != "", observation.Error != ""
+	for i, sample := range e.probeHistory {
 		if isGeneralProbe(sample.Kind) == general {
+			if oldest == -1 {
+				oldest = i
+			}
 			count++
+		}
+		if needKind && sample.Kind == observation.Kind {
+			observation.Kind, needKind = sample.Kind, false
+		}
+		if needTarget && sample.Target == observation.Target {
+			observation.Target, needTarget = sample.Target, false
+		}
+		if needError && sample.Error == observation.Error {
+			observation.Error, needError = sample.Error, false
 		}
 	}
 	if count >= ProbeWindowSize {
-		for i, sample := range e.probeHistory {
-			if isGeneralProbe(sample.Kind) == general {
-				e.probeHistory = append(e.probeHistory[:i], e.probeHistory[i+1:]...)
-				break
-			}
-		}
+		copy(e.probeHistory[oldest:], e.probeHistory[oldest+1:])
+		e.probeHistory[len(e.probeHistory)-1] = observation
+		return
 	}
 	e.probeHistory = append(e.probeHistory, observation)
 }
