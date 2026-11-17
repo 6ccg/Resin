@@ -48,6 +48,10 @@ type connectivityCheck struct {
 func (e *NodeEntry) RecordProbe(observation ProbeObservation) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
+	e.recordProbeLocked(observation)
+}
+
+func (e *NodeEntry) recordProbeLocked(observation ProbeObservation) {
 	general := isGeneralProbe(observation.Kind)
 	if general {
 		e.lastConnectivity = connectivityCheck{
@@ -56,43 +60,14 @@ func (e *NodeEntry) RecordProbe(observation ProbeObservation) {
 			present:   true,
 		}
 	}
-	count := 0
-	oldest := -1
-	// The same target and failure are often recorded dozens of times for a node.
-	// Reuse the existing strings for both restored and newly recorded history.
-	needKind, needTarget, needError := observation.Kind != "", observation.Target != "", observation.Error != ""
-	for i, sample := range e.probeHistory {
-		if isGeneralProbe(sample.Kind) == general {
-			if oldest == -1 {
-				oldest = i
-			}
-			count++
-		}
-		if needKind && sample.Kind == observation.Kind {
-			observation.Kind, needKind = sample.Kind, false
-		}
-		if needTarget && sample.Target == observation.Target {
-			observation.Target, needTarget = sample.Target, false
-		}
-		if needError && sample.Error == observation.Error {
-			observation.Error, needError = sample.Error, false
-		}
-	}
-	if count >= ProbeWindowSize {
-		copy(e.probeHistory[oldest:], e.probeHistory[oldest+1:])
-		e.probeHistory[len(e.probeHistory)-1] = observation
-		return
-	}
-	e.probeHistory = append(e.probeHistory, observation)
+	e.probeHistory.record(observation, general)
 }
 
 func (e *NodeEntry) ProbeHistoryJSON() json.RawMessage {
 	e.mu.RLock()
-	defer e.mu.RUnlock()
-	if len(e.probeHistory) == 0 {
-		return json.RawMessage("[]")
-	}
-	data, _ := json.Marshal(e.probeHistory)
+	checks := e.probeHistory.snapshot()
+	e.mu.RUnlock()
+	data, _ := json.Marshal(checks)
 	return data
 }
 
@@ -105,17 +80,22 @@ func (e *NodeEntry) RestoreProbeHistory(data json.RawMessage) error {
 	if err := json.Unmarshal(data, &samples); err != nil {
 		return err
 	}
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if len(e.probeHistory.samples) == 0 && len(samples) > 0 {
+		e.probeHistory.samples = make([]storedProbe, 0, min(len(samples), 2*ProbeWindowSize))
+	}
 	for _, sample := range samples {
-		e.RecordProbe(sample)
+		e.recordProbeLocked(sample)
 	}
 	return nil
 }
 
 func (e *NodeEntry) Diagnostics() ProbeDiagnostics {
 	e.mu.RLock()
-	checks := append([]ProbeObservation{}, e.probeHistory...)
+	checks := e.probeHistory.snapshot()
+	stats := summarizeProbes(e.probeHistory.samples)
 	e.mu.RUnlock()
-	stats := summarizeProbes(checks)
 	for i, j := 0, len(checks)-1; i < j; i, j = i+1, j-1 {
 		checks[i], checks[j] = checks[j], checks[i]
 	}
@@ -125,7 +105,7 @@ func (e *NodeEntry) Diagnostics() ProbeDiagnostics {
 func (e *NodeEntry) ProbeStability() ProbeStability {
 	e.mu.RLock()
 	defer e.mu.RUnlock()
-	return summarizeProbes(e.probeHistory)
+	return summarizeProbes(e.probeHistory.samples)
 }
 
 // LastConnectivityCheck excludes passive traffic and auxiliary diagnostics.
@@ -137,28 +117,28 @@ func (e *NodeEntry) LastConnectivityCheck() time.Time {
 
 func isGeneralProbe(kind string) bool { return kind == "latency" || kind == "egress" }
 
-func summarizeProbes(checks []ProbeObservation) ProbeStability {
+func summarizeProbes(checks []storedProbe) ProbeStability {
 	stats := ProbeStability{}
 	var first, last time.Time
 	var squaredDeviations float64
 	for _, sample := range checks {
-		if !isGeneralProbe(sample.Kind) {
+		if !sample.general {
 			continue
 		}
 		stats.Samples++
 		if stats.Samples == 1 {
-			first = sample.CheckedAt
+			first = sample.checkedAt
 		}
-		last = sample.CheckedAt
-		if !sample.Success {
+		last = sample.checkedAt
+		if !sample.success {
 			stats.ConsecutiveFailures++
 			continue
 		}
 		stats.ConsecutiveFailures = 0
 		stats.Successes++
-		delta := sample.DurationMs - stats.AverageDurationMs
+		delta := sample.durationMs - stats.AverageDurationMs
 		stats.AverageDurationMs += delta / float64(stats.Successes)
-		squaredDeviations += delta * (sample.DurationMs - stats.AverageDurationMs)
+		squaredDeviations += delta * (sample.durationMs - stats.AverageDurationMs)
 	}
 	if stats.Samples > 0 {
 		stats.SuccessRate = float64(stats.Successes) / float64(stats.Samples)

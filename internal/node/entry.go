@@ -47,7 +47,7 @@ type NodeEntry struct {
 	mu               sync.RWMutex
 	subscriptionIDs  []string
 	LastError        string
-	probeHistory     []ProbeObservation
+	probeHistory     probeHistory
 	lastConnectivity connectivityCheck
 	inspection       Inspection
 

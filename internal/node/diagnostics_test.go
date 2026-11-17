@@ -1,7 +1,9 @@
 package node
 
 import (
+	"fmt"
 	"math"
+	"slices"
 	"testing"
 	"time"
 )
@@ -41,12 +43,27 @@ func TestDiagnostics_StabilityExcludesTargetsAndRestores(t *testing.T) {
 func TestDiagnostics_BoundsGeneralAndTargetWindowsIndependently(t *testing.T) {
 	entry := NewNodeEntry(Hash{}, nil, time.Now(), 0)
 	entry.RecordProbe(ProbeObservation{Kind: "egress", Success: true})
+	start := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	var checks []ProbeObservation
 	for i := 0; i < ProbeWindowSize+5; i++ {
-		entry.RecordProbe(ProbeObservation{Kind: "latency", Success: false})
-		entry.RecordProbe(ProbeObservation{Kind: "target", Success: true})
+		at := start.Add(time.Duration(i) * time.Second)
+		latency := ProbeObservation{Kind: "latency", CheckedAt: at, Target: "https://example.com", Error: fmt.Sprintf("failure %d", i)}
+		target := ProbeObservation{Kind: "target", CheckedAt: at, Target: "https://example.com", Success: true, DurationMs: float64(i) + 0.5, LatencyMs: 3.25, HTTPStatus: 204}
+		entry.RecordProbe(latency)
+		entry.RecordProbe(target)
+		checks = append(checks, latency, target)
 	}
 	diagnostics := entry.Diagnostics()
 	if len(diagnostics.Checks) != 2*ProbeWindowSize || diagnostics.Stability.Samples != ProbeWindowSize || diagnostics.Stability.Successes != 0 {
 		t.Fatalf("unbounded or mixed windows: %+v", diagnostics.Stability)
+	}
+	want := checks[len(checks)-2*ProbeWindowSize:]
+	slices.Reverse(want)
+	restored := NewNodeEntry(Hash{}, nil, time.Now(), 0)
+	if err := restored.RestoreProbeHistory(entry.ProbeHistoryJSON()); err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(restored.Diagnostics().Checks, want) {
+		t.Fatal("history changed after rollover and JSON replay")
 	}
 }
