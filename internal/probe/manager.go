@@ -380,14 +380,8 @@ func (m *ProbeManager) probeEgressSync(ctx context.Context, batch bool, hash nod
 		return nil, err
 	}
 	defer release()
-	m.refreshEntry(hash, entry)
 
-	// Record synchronous probe attempts for metrics parity with async paths.
-	if m.onProbeEvent != nil {
-		m.onProbeEvent("egress")
-	}
-
-	ip, stage, err := m.performEgressProbe(hash)
+	ip, stage, err := m.probeEgressRound(ctx, hash, entry)
 	if err != nil {
 		if stage == egressProbeParseError {
 			return nil, fmt.Errorf("parse egress IP: %w", err)
@@ -618,7 +612,11 @@ func (m *ProbeManager) executeTask(task probeTask) {
 			}
 		}
 	case probeTaskKindAttributes:
-		_, _ = m.probeAttributes(task.key.hash, entry)
+		// An egress probe may have refreshed the attributes while this task waited.
+		if attributesDue(entry, m.settings()) {
+			m.refreshEntry(task.key.hash, entry)
+			_, _ = m.probeAttributes(task.key.hash, entry, netip.Addr{})
+		}
 	}
 }
 
@@ -834,14 +832,8 @@ func (m *ProbeManager) probeEgress(hash node.Hash, entry *node.NodeEntry) {
 	if entry.Outbound.Load() == nil {
 		return
 	}
-	m.refreshEntry(hash, entry)
 
-	// Always record the probe attempt (success or failure).
-	if m.onProbeEvent != nil {
-		m.onProbeEvent("egress")
-	}
-
-	_, stage, err := m.performEgressProbe(hash)
+	_, stage, err := m.probeEgressRound(context.Background(), hash, entry)
 	if err != nil {
 		if stage == egressProbeParseError {
 			log.Printf("[probe] parse egress IP for %s: %v", hash.Hex(), err)
@@ -850,6 +842,20 @@ func (m *ProbeManager) probeEgress(hash node.Hash, entry *node.NodeEntry) {
 		log.Printf("[probe] egress probe failed for %s: %v", hash.Hex(), err)
 		return
 	}
+}
+
+// The caller holds the node and global probe slots for the entire round.
+func (m *ProbeManager) probeEgressRound(ctx context.Context, hash node.Hash, entry *node.NodeEntry) (netip.Addr, egressProbeErrorStage, error) {
+	m.refreshEntry(hash, entry)
+	if m.onProbeEvent != nil {
+		m.onProbeEvent("egress")
+	}
+	ip, stage, err := m.performEgressProbe(hash)
+	if err == nil && ctx.Err() == nil && attributesDue(entry, m.settings()) {
+		// Provider failures are recorded separately from connectivity.
+		_, _ = m.probeAttributes(hash, entry, ip)
+	}
+	return ip, stage, err
 }
 
 // probeLatency performs a latency probe against a node using the configured test URL.

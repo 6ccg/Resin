@@ -57,6 +57,7 @@ func TestEntryResolutionRunsInsideProbeBudget(t *testing.T) {
 	}
 	cfg := config.NewDefaultRuntimeConfig()
 	cfg.ProbeConcurrency = 1
+	cfg.EgressAttributesEnabled = false
 	started, release, fetched := make(chan struct{}), make(chan struct{}), make(chan struct{}, 2)
 	var once sync.Once
 	defer once.Do(func() { close(release) })

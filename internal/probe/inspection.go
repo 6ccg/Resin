@@ -165,10 +165,11 @@ func (m *ProbeManager) probeAttributesSync(ctx context.Context, batch bool, hash
 		return nil, err
 	}
 	defer release()
-	return m.probeAttributes(hash, entry)
+	m.refreshEntry(hash, entry)
+	return m.probeAttributes(hash, entry, netip.Addr{})
 }
 
-func (m *ProbeManager) probeAttributes(hash node.Hash, entry *node.NodeEntry) (*node.EgressAttributes, error) {
+func (m *ProbeManager) probeAttributes(hash node.Hash, entry *node.NodeEntry, expectedIP netip.Addr) (*node.EgressAttributes, error) {
 	if m.fetcher == nil {
 		return nil, fmt.Errorf("probe fetcher not configured")
 	}
@@ -182,11 +183,13 @@ func (m *ProbeManager) probeAttributes(hash node.Hash, entry *node.NodeEntry) (*
 	if !ok {
 		return nil, fmt.Errorf("unsupported attribute provider: %s", cfg.EgressAttributesProvider)
 	}
-	m.refreshEntry(hash, entry)
 	body, _, err := m.fetcher(hash, cfg.EgressAttributesURL)
 	var result *node.EgressAttributes
 	if err == nil {
 		result, err = provider.Parse(body)
+	}
+	if err == nil && expectedIP.IsValid() && result.IP != expectedIP.String() {
+		err = fmt.Errorf("attribute provider observed exit %s, expected %s", result.IP, expectedIP)
 	}
 	if err != nil {
 		entry.SetAttributes(nil, err)
@@ -202,6 +205,23 @@ func (m *ProbeManager) probeAttributes(hash node.Hash, entry *node.NodeEntry) (*
 	return result, nil
 }
 
+func attributesDue(entry *node.NodeEntry, cfg *config.RuntimeConfig) bool {
+	if !cfg.EgressAttributesEnabled || entry.IsCircuitOpen() {
+		return false
+	}
+	inspection := entry.Inspection()
+	if inspection.AttributesAttemptAt == nil {
+		return true
+	}
+	interval := time.Duration(cfg.EgressAttributesInterval)
+	if inspection.AttributesError != "" {
+		interval = retryInterval(time.Duration(cfg.RecoveryProbeInterval), min(interval, time.Duration(cfg.RecoveryProbeMaxInterval)), max(0, inspection.AttributesFailures-1))
+		return time.Since(*inspection.AttributesAttemptAt) >= interval
+	}
+	current := inspection.Attributes != nil && inspection.Attributes.Provider == cfg.EgressAttributesProvider && inspection.Attributes.SourceURL == cfg.EgressAttributesURL && inspection.Attributes.IP == entry.GetEgressIP().String()
+	return !current || time.Since(*inspection.AttributesAttemptAt) >= interval
+}
+
 func (m *ProbeManager) scanAttributes() {
 	cfg := m.settings()
 	if !cfg.ProbeEnabled || !cfg.EgressAttributesEnabled {
@@ -214,19 +234,12 @@ func (m *ProbeManager) scanAttributes() {
 			return false
 		default:
 		}
-		if !entry.HasOutbound() || entry.IsDisabledBySubscriptions(subLookup) || entry.IsCircuitOpen() {
+		if !entry.HasOutbound() || entry.IsDisabledBySubscriptions(subLookup) {
 			return true
 		}
-		inspection := entry.Inspection()
-		interval := time.Duration(cfg.EgressAttributesInterval)
-		if inspection.AttributesError != "" {
-			interval = retryInterval(time.Duration(cfg.RecoveryProbeInterval), min(interval, time.Duration(cfg.RecoveryProbeMaxInterval)), max(0, inspection.AttributesFailures-1))
+		if attributesDue(entry, cfg) {
+			m.enqueuePeriodicProbe(hash, probeTaskKindAttributes, probePriorityNormal)
 		}
-		sameSource := inspection.Attributes != nil && inspection.Attributes.Provider == cfg.EgressAttributesProvider && inspection.Attributes.SourceURL == cfg.EgressAttributesURL && inspection.Attributes.IP == entry.GetEgressIP().String()
-		if (sameSource || inspection.AttributesError != "") && inspection.AttributesAttemptAt != nil && time.Since(*inspection.AttributesAttemptAt) < interval {
-			return true
-		}
-		m.enqueuePeriodicProbe(hash, probeTaskKindAttributes, probePriorityNormal)
 		return true
 	})
 }

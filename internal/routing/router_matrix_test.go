@@ -275,12 +275,14 @@ func TestRouteRequest_SameIPRotationMissRecreatesLease(t *testing.T) {
 		return NewPlatformRoutingState(), false
 	})
 
-	oldExpiry := time.Now().Add(time.Hour).UnixNano()
+	oldCreatedAt := time.Now().Add(-time.Minute)
+	oldExpiry := oldCreatedAt.Add(time.Duration(plat.StickyTTLNs)).UnixNano()
 	oldLease := Lease{
 		NodeHash:       currentHash,
 		EgressIP:       currentEntry.GetEgressIP(),
+		CreatedAtNs:    oldCreatedAt.UnixNano(),
 		ExpiryNs:       oldExpiry,
-		LastAccessedNs: time.Now().UnixNano(),
+		LastAccessedNs: oldCreatedAt.UnixNano(),
 	}
 	state.Leases.CreateLease("acct-miss", oldLease)
 
@@ -302,8 +304,11 @@ func TestRouteRequest_SameIPRotationMissRecreatesLease(t *testing.T) {
 	if newLease.NodeHash != replacementHash {
 		t.Fatalf("lease node not updated: got=%s want=%s", newLease.NodeHash.Hex(), replacementHash.Hex())
 	}
-	if newLease.ExpiryNs == oldExpiry {
-		t.Fatalf("recreated lease must have new expiry, still got old %d", oldExpiry)
+	if newLease.ExpiryNs <= oldExpiry {
+		t.Fatalf("recreated lease expiry = %d, must be later than %d", newLease.ExpiryNs, oldExpiry)
+	}
+	if lifetime := newLease.ExpiryNs - newLease.CreatedAtNs; lifetime != plat.StickyTTLNs {
+		t.Fatalf("recreated lease lifetime = %v, want %v", time.Duration(lifetime), time.Duration(plat.StickyTTLNs))
 	}
 	if got := state.IPLoadStats.Get(oldLease.EgressIP); got != 0 {
 		t.Fatalf("old egress ip load should be 0, got %d", got)

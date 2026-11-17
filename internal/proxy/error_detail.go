@@ -16,6 +16,12 @@ import (
 
 const maxUpstreamErrMsgLen = 512
 
+// Winsock returns native error codes instead of Go's portable Windows errno values.
+const (
+	wsaConnAborted syscall.Errno = 10053
+	wsaConnReset   syscall.Errno = 10054
+)
+
 type upstreamErrorDetail struct {
 	Kind    string
 	Errno   string
@@ -125,9 +131,9 @@ func normalizeErrno(errno syscall.Errno) string {
 	switch errno {
 	case syscall.ECONNREFUSED:
 		return "ECONNREFUSED"
-	case syscall.ECONNRESET:
+	case syscall.ECONNRESET, wsaConnReset:
 		return "ECONNRESET"
-	case syscall.ECONNABORTED:
+	case syscall.ECONNABORTED, wsaConnAborted:
 		return "ECONNABORTED"
 	case syscall.ENETUNREACH:
 		return "ENETUNREACH"
