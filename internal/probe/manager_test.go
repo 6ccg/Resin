@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Resinat/Resin/internal/config"
 	"github.com/Resinat/Resin/internal/node"
 	"github.com/Resinat/Resin/internal/subscription"
 	"github.com/Resinat/Resin/internal/testutil"
@@ -752,7 +753,7 @@ func TestProbeQueue_FullDropsWithoutBlocking(t *testing.T) {
 	}
 }
 
-func TestProbeSync_BypassesAsyncWorkerLimit(t *testing.T) {
+func TestProbeSync_BypassesWorkerCountWithinGlobalLimit(t *testing.T) {
 	pool := topology.NewGlobalNodePool(topology.PoolConfig{
 		MaxLatencyTableEntries: 16,
 		MaxConsecutiveFailures: func() int { return 3 },
@@ -777,9 +778,12 @@ func TestProbeSync_BypassesAsyncWorkerLimit(t *testing.T) {
 	started := make(chan struct{})
 	release := make(chan struct{})
 	var startedOnce sync.Once
+	cfg := config.NewDefaultRuntimeConfig()
+	cfg.ProbeConcurrency = 2
 	mgr := NewProbeManager(ProbeConfig{
-		Pool:        pool,
-		Concurrency: 1,
+		Pool:          pool,
+		Concurrency:   1,
+		RuntimeConfig: func() *config.RuntimeConfig { return cfg },
 		Fetcher: func(hash node.Hash, _ string) ([]byte, time.Duration, error) {
 			if hash == hashAsync {
 				startedOnce.Do(func() { close(started) })

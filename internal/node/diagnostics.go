@@ -6,8 +6,8 @@ import (
 	"time"
 )
 
-// Keep independent windows so target-specific failures do not displace all
-// general health samples or influence the node's circuit breaker.
+// Keep independent windows for connectivity checks and auxiliary diagnostics.
+// Target failures and exit-metadata errors do not grade connectivity health.
 const ProbeWindowSize = 50
 
 type ProbeObservation struct {
@@ -40,16 +40,16 @@ type ProbeDiagnostics struct {
 func (e *NodeEntry) RecordProbe(observation ProbeObservation) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
-	target := observation.Kind == "target"
+	general := isGeneralProbe(observation.Kind)
 	count := 0
 	for _, sample := range e.probeHistory {
-		if (sample.Kind == "target") == target {
+		if isGeneralProbe(sample.Kind) == general {
 			count++
 		}
 	}
 	if count >= ProbeWindowSize {
 		for i, sample := range e.probeHistory {
-			if (sample.Kind == "target") == target {
+			if isGeneralProbe(sample.Kind) == general {
 				e.probeHistory = append(e.probeHistory[:i], e.probeHistory[i+1:]...)
 				break
 			}
@@ -100,12 +100,26 @@ func (e *NodeEntry) ProbeStability() ProbeStability {
 	return summarizeProbes(e.probeHistory)
 }
 
+// LastConnectivityCheck excludes passive traffic and auxiliary diagnostics.
+func (e *NodeEntry) LastConnectivityCheck() time.Time {
+	e.mu.RLock()
+	defer e.mu.RUnlock()
+	for i := len(e.probeHistory) - 1; i >= 0; i-- {
+		if isGeneralProbe(e.probeHistory[i].Kind) {
+			return e.probeHistory[i].CheckedAt
+		}
+	}
+	return time.Time{}
+}
+
+func isGeneralProbe(kind string) bool { return kind == "latency" || kind == "egress" }
+
 func summarizeProbes(checks []ProbeObservation) ProbeStability {
 	stats := ProbeStability{}
 	var first, last time.Time
 	var squaredDeviations float64
 	for _, sample := range checks {
-		if sample.Kind == "target" {
+		if !isGeneralProbe(sample.Kind) {
 			continue
 		}
 		stats.Samples++

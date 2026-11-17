@@ -2,6 +2,7 @@ package probe
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/netip"
 	"time"
@@ -10,6 +11,8 @@ import (
 	"github.com/Resinat/Resin/internal/node"
 	"github.com/Resinat/Resin/internal/probe/attributes"
 )
+
+var errProbeCancelled = errors.New("probe cancelled before execution")
 
 func IsAttributeProvider(id string) bool { _, ok := attributes.Lookup(id); return ok }
 
@@ -25,7 +28,27 @@ func (m *ProbeManager) settings() *config.RuntimeConfig {
 	return cfg
 }
 
-func (m *ProbeManager) acquireSlot(ctx context.Context) bool {
+// When both classes have work, reserve half of the slots for manual batches.
+// Either class can use spare capacity when the other has no waiting tasks.
+func (m *ProbeManager) acquireSlot(ctx context.Context, batch bool) bool {
+	m.slotMu.Lock()
+	if batch {
+		m.slotBatchWaiting++
+	} else {
+		m.slotNormalWaiting++
+	}
+	m.slotMu.Unlock()
+	defer func() {
+		m.slotMu.Lock()
+		if batch {
+			m.slotBatchWaiting--
+		} else {
+			m.slotNormalWaiting--
+		}
+		close(m.slotChanged)
+		m.slotChanged = make(chan struct{})
+		m.slotMu.Unlock()
+	}()
 	for {
 		select {
 		case <-ctx.Done():
@@ -36,8 +59,16 @@ func (m *ProbeManager) acquireSlot(ctx context.Context) bool {
 		}
 		m.slotMu.Lock()
 		limit := max(1, m.settings().ProbeConcurrency)
-		if m.slotsActive < limit {
+		reserved := max(1, limit/2)
+		allowed := m.slotBatchWaiting == 0 || m.slotBatchActive >= reserved
+		if batch {
+			allowed = m.slotBatchActive < reserved || m.slotNormalWaiting == 0
+		}
+		if m.slotsActive < limit && allowed {
 			m.slotsActive++
+			if batch {
+				m.slotBatchActive++
+			}
 			m.slotMu.Unlock()
 			return true
 		}
@@ -53,18 +84,58 @@ func (m *ProbeManager) acquireSlot(ctx context.Context) bool {
 	}
 }
 
-func (m *ProbeManager) releaseSlot() {
+func (m *ProbeManager) releaseSlot(batch bool) {
 	m.slotMu.Lock()
 	m.slotsActive--
+	if batch {
+		m.slotBatchActive--
+	}
 	close(m.slotChanged)
 	m.slotChanged = make(chan struct{})
 	m.slotMu.Unlock()
 }
 
+// Acquire the node before a global slot, so another check waiting on the same
+// proxy does not consume network capacity. Queue wait is outside probe timing
+// and never becomes a failed health observation.
+func (m *ProbeManager) acquireNodeSlot(ctx context.Context, batch bool, hash node.Hash) (*node.NodeEntry, func(), error) {
+	entry, ok := m.pool.GetEntry(hash)
+	if !ok || !entry.HasOutbound() {
+		return nil, nil, fmt.Errorf("node outbound not ready")
+	}
+	if !entry.AcquireProbe(ctx, m.stopCh) {
+		return nil, nil, errProbeCancelled
+	}
+	if !m.acquireSlot(ctx, batch) {
+		entry.ReleaseProbe()
+		return nil, nil, errProbeCancelled
+	}
+	release := func() { m.releaseSlot(batch); entry.ReleaseProbe() }
+	select {
+	case <-ctx.Done():
+		release()
+		return nil, nil, errProbeCancelled
+	case <-m.stopCh:
+		release()
+		return nil, nil, errProbeCancelled
+	default:
+	}
+	current, ok := m.pool.GetEntry(hash)
+	if !ok || current != entry || !entry.HasOutbound() {
+		release()
+		return nil, nil, fmt.Errorf("node changed before probe execution")
+	}
+	return entry, release, nil
+}
+
 func (m *ProbeManager) recoveryInterval(entry *node.NodeEntry) time.Duration {
 	cfg := m.settings()
-	interval, maximum := time.Duration(cfg.RecoveryProbeInterval), time.Duration(cfg.RecoveryProbeMaxInterval)
-	for failures := max(0, int(entry.FailureCount.Load())-cfg.MaxConsecutiveFailures); failures > 0 && interval < maximum; failures-- {
+	return retryInterval(time.Duration(cfg.RecoveryProbeInterval), time.Duration(cfg.RecoveryProbeMaxInterval), max(0, int(entry.FailureCount.Load())-cfg.MaxConsecutiveFailures))
+}
+
+func retryInterval(initial, maximum time.Duration, failures int) time.Duration {
+	interval := min(initial, maximum)
+	for ; failures > 0 && interval < maximum; failures-- {
 		if interval > maximum/2 {
 			return maximum
 		}
@@ -85,10 +156,19 @@ func (m *ProbeManager) refreshEntry(hash node.Hash, entry *node.NodeEntry) {
 }
 
 func (m *ProbeManager) ProbeAttributesSync(hash node.Hash) (*node.EgressAttributes, error) {
-	entry, ok := m.pool.GetEntry(hash)
-	if !ok || !entry.HasOutbound() {
-		return nil, fmt.Errorf("node outbound not ready")
+	return m.probeAttributesSync(context.Background(), true, hash)
+}
+
+func (m *ProbeManager) probeAttributesSync(ctx context.Context, batch bool, hash node.Hash) (*node.EgressAttributes, error) {
+	entry, release, err := m.acquireNodeSlot(ctx, batch, hash)
+	if err != nil {
+		return nil, err
 	}
+	defer release()
+	return m.probeAttributes(hash, entry)
+}
+
+func (m *ProbeManager) probeAttributes(hash node.Hash, entry *node.NodeEntry) (*node.EgressAttributes, error) {
 	if m.fetcher == nil {
 		return nil, fmt.Errorf("probe fetcher not configured")
 	}
@@ -140,13 +220,13 @@ func (m *ProbeManager) scanAttributes() {
 		inspection := entry.Inspection()
 		interval := time.Duration(cfg.EgressAttributesInterval)
 		if inspection.AttributesError != "" {
-			interval = min(interval, time.Duration(cfg.RecoveryProbeInterval))
+			interval = retryInterval(time.Duration(cfg.RecoveryProbeInterval), min(interval, time.Duration(cfg.RecoveryProbeMaxInterval)), max(0, inspection.AttributesFailures-1))
 		}
 		sameSource := inspection.Attributes != nil && inspection.Attributes.Provider == cfg.EgressAttributesProvider && inspection.Attributes.SourceURL == cfg.EgressAttributesURL && inspection.Attributes.IP == entry.GetEgressIP().String()
-		if (sameSource || inspection.Attributes == nil && inspection.AttributesError != "") && inspection.AttributesAttemptAt != nil && time.Since(*inspection.AttributesAttemptAt) < interval {
+		if (sameSource || inspection.AttributesError != "") && inspection.AttributesAttemptAt != nil && time.Since(*inspection.AttributesAttemptAt) < interval {
 			return true
 		}
-		m.enqueueProbe(hash, probeTaskKindAttributes, probePriorityNormal)
+		m.enqueuePeriodicProbe(hash, probeTaskKindAttributes, probePriorityNormal)
 		return true
 	})
 }

@@ -107,3 +107,25 @@ func TestNodeInspection_FilterEgressExportAndBatch(t *testing.T) {
 	}
 	t.Fatal("batch did not finish")
 }
+
+func TestUnconfirmedFailureIsFilterableButNotExportedAsValid(t *testing.T) {
+	srv, cp, _ := newControlPlaneTestServer(t)
+	sub := subscription.NewSubscription("11111111-1111-1111-1111-111111111111", "source", "", true, false)
+	cp.SubMgr.Register(sub)
+	raw := `{"type":"http","server":"entry.example","server_port":8080}`
+	addNodeForNodeListTest(t, cp, sub, raw, "")
+	markNodeHealthyForNodeListTest(t, cp, raw)
+	entry, _ := cp.Pool.GetEntry(node.HashFromRawOptions([]byte(raw)))
+	entry.FailureCount.Store(1)
+	entry.RecordProbe(node.ProbeObservation{Kind: "latency", CheckedAt: time.Now(), Success: false})
+	r := doJSONRequest(t, srv, http.MethodGet, "/api/v1/nodes?validity=unstable", nil, true)
+	if r.Code != http.StatusOK || decodeJSONMap(t, r)["total"] != float64(1) {
+		t.Fatalf("pending verification filter failed: %s", r.Body.String())
+	}
+	for state, want := range map[string]float64{"valid": 0, "unstable": 1} {
+		r = doJSONRequest(t, srv, http.MethodPost, "/api/v1/nodes/export", map[string]any{"format": "json", "filters": map[string]any{"validity": state}}, true)
+		if r.Code != http.StatusOK || decodeJSONMap(t, r)["exported"] != want {
+			t.Fatalf("incorrect %s export: %s", state, r.Body.String())
+		}
+	}
+}

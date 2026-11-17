@@ -938,10 +938,10 @@ export function DashboardPage() {
             <Shield size={18} />
           </div>
           <div>
-            <p className="dashboard-kpi-label">{t("节点健康率")}</p>
+            <p className="dashboard-kpi-label" title={t("未熔断不代表最近检测有效，当前结果请查看节点池。")}>{t("节点未熔断率")}</p>
             <p className="dashboard-kpi-value">{formatPercent(nodeHealthRate)}</p>
             <p className="dashboard-kpi-sub">
-              {t("健康")} {formatCount(snapshotNodePool?.healthy_nodes ?? 0)} / {t("总计")} {formatCount(snapshotNodePool?.total_nodes ?? 0)}
+              {t("未熔断")} {formatCount(snapshotNodePool?.healthy_nodes ?? 0)} / {t("总计")} {formatCount(snapshotNodePool?.total_nodes ?? 0)}
             </p>
           </div>
           <Badge className="dashboard-kpi-badge" variant={nodeHealthRate >= 0.75 ? "success" : "warning"}>
@@ -1046,7 +1046,7 @@ export function DashboardPage() {
         <Card className="dashboard-panel">
           <div className="dashboard-panel-header">
             <h3>{t("节点池趋势")}</h3>
-            <p>{t("节点总数 / 健康节点数")}</p>
+            <p>{t("节点总数 / 未熔断节点数")}</p>
           </div>
           <TrendChart
             labels={nodeLabels}
@@ -1059,7 +1059,7 @@ export function DashboardPage() {
                 fillColor: "rgba(45, 99, 216, 0.11)",
               },
               {
-                name: t("健康节点数"),
+                name: t("未熔断节点数"),
                 values: nodeHealthy,
                 color: "#0c9f68",
               },

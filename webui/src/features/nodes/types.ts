@@ -93,7 +93,7 @@ export type ProbeStability = {
 };
 
 export type ProbeObservation = {
-  kind: "latency" | "egress" | "target";
+  kind: "latency" | "egress" | "egress_metadata" | "target";
   target: string;
   checked_at: string;
   success: boolean;

@@ -1,6 +1,7 @@
 package node
 
 import (
+	"context"
 	"encoding/json"
 	"net/netip"
 	"regexp"
@@ -39,6 +40,8 @@ type NodeEntry struct {
 	CreatedAt    time.Time
 	endpointOnce sync.Once
 	endpoint     EntryEndpoint
+	probeOnce    sync.Once
+	probeGate    chan struct{}
 
 	// --- Dynamic (guarded by mu) ---
 	mu              sync.RWMutex
@@ -248,6 +251,22 @@ func (e *NodeEntry) HasLatency() bool {
 func (e *NodeEntry) HasOutbound() bool {
 	return e.Outbound.Load() != nil
 }
+
+// AcquireProbe serializes active checks through one node. Different probe
+// kinds and manual checks must not compete with each other on the same proxy.
+func (e *NodeEntry) AcquireProbe(ctx context.Context, stopped <-chan struct{}) bool {
+	e.probeOnce.Do(func() { e.probeGate = make(chan struct{}, 1) })
+	select {
+	case e.probeGate <- struct{}{}:
+		return true
+	case <-ctx.Done():
+		return false
+	case <-stopped:
+		return false
+	}
+}
+
+func (e *NodeEntry) ReleaseProbe() { <-e.probeGate }
 
 // IsHealthy returns true when the node can be treated as healthy for
 // routing/statistics: outbound is ready and circuit is not open.

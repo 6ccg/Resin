@@ -29,7 +29,7 @@ import type { NodeListFilters, NodeSortBy, SortOrder } from "./types";
 import "./nodes.css";
 
 type NodeStatusFilter = "all" | "healthy" | "circuit_open" | "error" | "disabled";
-type NodeDisplayStatus = "healthy" | "circuit_open" | "pending_test" | "error" | "disabled";
+type NodeCircuitStatus = "circuit_closed" | "circuit_open" | "pending_test" | "error" | "disabled";
 type ProbeAction = "egress" | "latency";
 
 type NodeFilterDraft = {
@@ -62,6 +62,14 @@ const PAGE_SIZE_OPTIONS = [20, 50, 100, 200] as const;
 const EMPTY_PLATFORMS: Platform[] = [];
 const col = createColumnHelper<NodeSummary>();
 const EMPTY_NODES: NodeSummary[] = [];
+const VALIDITY_LABELS: Record<string, string> = { valid: "有效", unstable: "待复检", invalid: "无效", expired: "已过期", untested: "未测试", disabled: "禁用", error: "错误" };
+const VALIDITY_HINTS: Record<string, string> = {
+  valid: "近期检测通过，且当前没有连续失败。",
+  unstable: "出现失败但尚未熔断，已安排复检；代理仍可能尝试此节点。",
+  invalid: "已熔断，暂不作为新请求的代理候选，等待恢复检测。",
+  expired: "上次成功检测结果已过期，需要重新检测。",
+  untested: "尚无通用检测结果。",
+};
 
 function parseBoolParam(value: string | null): boolean | undefined {
   if (value === null) {
@@ -209,10 +217,10 @@ function hasReferenceLatency(node: NodeSummary): node is NodeSummary & { referen
 }
 
 function isPendingTestNode(node: NodeSummary): boolean {
-  return Boolean(node.circuit_open_since) && node.failure_count === 0;
+  return node.validity === "untested" && Boolean(node.circuit_open_since) && node.failure_count === 0;
 }
 
-function getNodeDisplayStatus(node: NodeSummary): NodeDisplayStatus {
+function getNodeCircuitStatus(node: NodeSummary): NodeCircuitStatus {
   if (!node.enabled) {
     return "disabled";
   }
@@ -225,7 +233,7 @@ function getNodeDisplayStatus(node: NodeSummary): NodeDisplayStatus {
   if (node.circuit_open_since) {
     return "circuit_open";
   }
-  return "healthy";
+  return "circuit_closed";
 }
 
 function referenceLatencyColor(latencyMs: number): string {
@@ -242,7 +250,7 @@ function referenceLatencyColor(latencyMs: number): string {
 }
 
 function displayableReferenceLatencyMs(node: NodeSummary): number | null {
-  if (getNodeDisplayStatus(node) !== "healthy") {
+  if (node.validity !== "valid" || node.failure_count > 0 || getNodeCircuitStatus(node) !== "circuit_closed") {
     return null;
   }
   if (!hasReferenceLatency(node)) {
@@ -598,16 +606,18 @@ export function NodesPage() {
       cell: (info) => {
         const node = info.row.original;
         const value = node.validity;
-        const statusLabel = { healthy: "健康", circuit_open: "熔断", pending_test: "待测", error: "错误", disabled: "禁用" }[getNodeDisplayStatus(node)];
-        return <div className="node-pool-cell"><Badge variant={value === "valid" ? "success" : value === "invalid" ? "danger" : "neutral"}>{t(({ valid: "有效", invalid: "无效", expired: "已过期", untested: "未测试", disabled: "禁用", error: "错误" } as Record<string, string>)[value] || "未知")}</Badge><small>{t(statusLabel)}{node.failure_count > 0 ? " · " + t("失败 {{count}} 次", { count: node.failure_count }) : ""}</small></div>;
+        const statusLabel = { circuit_closed: "未熔断", circuit_open: "熔断", pending_test: "待测", error: "错误", disabled: "禁用" }[getNodeCircuitStatus(node)];
+        return <div className="node-pool-cell" title={t(VALIDITY_HINTS[value] || "")}><Badge variant={value === "valid" ? "success" : value === "invalid" || value === "error" ? "danger" : value === "unstable" || value === "expired" ? "warning" : "neutral"}>{t(VALIDITY_LABELS[value] || "未知")}</Badge><small>{t(statusLabel)}{node.failure_count > 0 ? " · " + t("连续失败 {{count}} 次", { count: node.failure_count }) : ""}</small></div>;
       },
     }),
     col.display({
-      id: "latency", size: 115, header: t("延迟 / 上次探测"),
+      id: "latency", size: 115, header: t("参考延迟"),
       cell: (info) => {
         const node = info.row.original;
         const latency = displayableReferenceLatencyMs(node);
-        return <div className="node-pool-cell"><strong style={latency === null ? undefined : { color: referenceLatencyColor(latency) }}>{latency === null ? "—" : formatLatency(latency)}</strong><small title={formatDateTime(node.last_latency_probe_attempt || "")}>{formatRelativeTime(node.last_latency_probe_attempt)}</small></div>;
+        const lastCheck = node.probe_stability?.last_checked_at || node.last_latency_probe_attempt;
+        const hint = latency === null && hasReferenceLatency(node) ? t("历史参考延迟：{{latency}}，不代表当前检测通过。", { latency: formatLatency(node.reference_latency_ms) }) : t("历史成功记录的平滑延迟。");
+        return <div className="node-pool-cell"><strong title={hint} style={latency === null ? undefined : { color: referenceLatencyColor(latency) }}>{latency === null ? "—" : formatLatency(latency)}</strong><small title={t("上次通用检测：{{time}}", { time: formatDateTime(lastCheck || "") })}>{formatRelativeTime(lastCheck)}</small></div>;
       },
     }),
     col.display({
@@ -652,7 +662,7 @@ export function NodesPage() {
           {view === "nodes" ? <div className="node-pool-totals" aria-live="polite">
             <span>{t("节点")} <strong>{nodesPage.total.toLocaleString()}</strong></span>
             <span>{t("出口 IP")} <strong>{nodesPage.unique_egress_ips.toLocaleString()}</strong></span>
-            <span>{t("健康 IP")} <strong className="node-pool-healthy">{nodesPage.unique_healthy_egress_ips.toLocaleString()}</strong></span>
+            <span title={t("存在未熔断入口的出口数量，包含待复检或过期节点，不等同于检测有效。")}>{t("未熔断 IP")} <strong>{nodesPage.unique_healthy_egress_ips.toLocaleString()}</strong></span>
           </div> : <span className="node-pool-hint">{t("按出口聚合，查看关联入口与检测属性。")}</span>}
         </div>
         <div className="node-pool-filterbar">
@@ -660,7 +670,7 @@ export function NodesPage() {
           <Input className="node-pool-country" aria-label={t("国家筛选")} value={draftFilters.region} onChange={(event) => handleFilterChange("region", event.target.value)} list="node-countries" placeholder={t("国家：US,JP,HK")} />
           <datalist id="node-countries">{allRegions.map((r) => <option key={r.code} value={r.code}>{r.name}</option>)}</datalist>
           <Select aria-label={t("检测有效性")} value={draftFilters.validity} onChange={(event) => handleFilterChange("validity", event.target.value)}>
-            <option value="">{t("全部有效性")}</option><option value="valid">{t("有效")}</option><option value="invalid">{t("无效")}</option><option value="expired">{t("已过期")}</option><option value="untested">{t("未测试")}</option>
+            <option value="">{t("全部有效性")}</option><option value="valid">{t("有效")}</option><option value="unstable">{t("待复检")}</option><option value="invalid">{t("无效")}</option><option value="expired">{t("已过期")}</option><option value="untested">{t("未测试")}</option>
           </Select>
           <Button variant={advancedOpen ? "primary" : "secondary"} size="sm" aria-expanded={advancedOpen} aria-controls="node-pool-advanced" onClick={() => setAdvancedOpen(!advancedOpen)}><SlidersHorizontal size={15} />{t("高级筛选")}{advancedCount ? <span className="node-pool-filter-count">{advancedCount}</span> : null}</Button>
           {hasFilters ? <Button size="sm" variant="ghost" onClick={resetFilters} title={t("清空筛选")}><Eraser size={15} />{t("重置")}</Button> : null}
@@ -676,7 +686,7 @@ export function NodesPage() {
             ["asn_keyword", "ASN", "AS12345"],
             ["exclude_regions", "排除国家", "CN,RU"],
           ] as const).map(([key, label, placeholder]) => <label className="field-group" key={key}><span className="field-label">{t(label)}</span><Input value={draftFilters[key]} placeholder={placeholder} onChange={(event) => handleFilterChange(key, event.target.value)} /></label>)}
-          <label className="field-group"><span className="field-label">{t("运行状态")}</span><Select value={draftFilters.status} onChange={(event) => handleFilterChange("status", event.target.value)}><option value="all">{t("全部")}</option><option value="healthy">{t("健康")}</option><option value="circuit_open">{t("熔断 / 待测")}</option><option value="error">{t("错误")}</option><option value="disabled">{t("禁用")}</option></Select></label>
+          <label className="field-group"><span className="field-label">{t("熔断 / 启用状态")}</span><Select value={draftFilters.status} onChange={(event) => handleFilterChange("status", event.target.value)}><option value="all">{t("全部")}</option><option value="healthy">{t("未熔断")}</option><option value="circuit_open">{t("熔断 / 待测")}</option><option value="error">{t("错误")}</option><option value="disabled">{t("禁用")}</option></Select></label>
           <label className="field-group"><span className="field-label">Hosting</span><Select value={draftFilters.hosting} onChange={(event) => handleFilterChange("hosting", event.target.value)}><option value="">{t("全部")}</option><option value="true">{t("是")}</option><option value="false">{t("否")}</option><option value="unknown">{t("未知")}</option></Select></label>
         </div> : null}
       </Card>
@@ -745,10 +755,14 @@ export function NodesPage() {
                     <p>{!detailNode.has_outbound ? "-" : detailNode.failure_count}</p>
                   </div>
                   <div>
-                    <span>{t("状态")}</span>
+                    <span>{t("检测有效性")}</span>
+                    <p title={t(VALIDITY_HINTS[detailNode.validity] || "")}><Badge variant={detailNode.validity === "valid" ? "success" : detailNode.validity === "invalid" || detailNode.validity === "error" ? "danger" : "warning"}>{t(VALIDITY_LABELS[detailNode.validity] || "未知")}</Badge></p>
+                  </div>
+                  <div>
+                    <span>{t("熔断状态")}</span>
                     <div>
                       {(() => {
-                        const status = getNodeDisplayStatus(detailNode);
+                        const status = getNodeCircuitStatus(detailNode);
                         return (
                           <div style={{ display: "flex", alignItems: "baseline", gap: "4px", flexWrap: "wrap" }}>
                             {status === "error" ? (
@@ -760,7 +774,7 @@ export function NodesPage() {
                             ) : status === "circuit_open" ? (
                               <Badge variant="warning">{t("熔断")}</Badge>
                             ) : (
-                              <Badge variant="success">{t("健康")}</Badge>
+                              <Badge variant="neutral">{t("未熔断")}</Badge>
                             )}
                             {(status === "circuit_open" || status === "pending_test") && detailNode.circuit_open_since ? (
                               <span
@@ -785,14 +799,8 @@ export function NodesPage() {
                     </p>
                   </div>
                   <div>
-                    <span>{t("参考延迟")}</span>
-                    {(() => {
-                      const latencyMs = displayableReferenceLatencyMs(detailNode);
-                      if (latencyMs === null) {
-                        return <p>-</p>;
-                      }
-                      return <p style={{ color: referenceLatencyColor(latencyMs) }}>{formatLatency(latencyMs)}</p>;
-                    })()}
+                    <span>{t("历史参考延迟")}</span>
+                    <p title={t("历史成功记录的平滑延迟，不代表当前检测通过。")}>{hasReferenceLatency(detailNode) ? formatLatency(detailNode.reference_latency_ms) : "—"}</p>
                   </div>
                   <div>
                     <span>{t("上次探测")}</span>

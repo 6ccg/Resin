@@ -34,6 +34,7 @@ type Inspection struct {
 	Attributes          *EgressAttributes `json:"attributes,omitempty"`
 	AttributesAttemptAt *time.Time        `json:"attributes_attempt_at,omitempty"`
 	AttributesError     string            `json:"attributes_error,omitempty"`
+	AttributesFailures  int               `json:"attributes_failures,omitempty"`
 }
 
 type EntryEndpoint struct {
@@ -90,8 +91,10 @@ func (e *NodeEntry) SetAttributes(attributes *EgressAttributes, err error) {
 	e.inspection.AttributesError = ""
 	if err != nil {
 		e.inspection.AttributesError = err.Error()
+		e.inspection.AttributesFailures++
 		return
 	}
+	e.inspection.AttributesFailures = 0
 	if attributes != nil {
 		copy := *attributes
 		e.inspection.Attributes = &copy
@@ -173,13 +176,22 @@ func (e *NodeEntry) Validity(enabled bool, ttl time.Duration) string {
 		if sample.Kind != "latency" && sample.Kind != "egress" {
 			continue
 		}
-		if !sample.Success || e.IsCircuitOpen() {
+		if e.IsCircuitOpen() {
 			return "invalid"
+		}
+		if !sample.Success || e.FailureCount.Load() > 0 {
+			return "unstable"
 		}
 		if time.Since(sample.CheckedAt) > ttl {
 			return "expired"
 		}
 		return "valid"
+	}
+	if e.FailureCount.Load() > 0 {
+		if e.IsCircuitOpen() {
+			return "invalid"
+		}
+		return "unstable"
 	}
 	return "untested"
 }
