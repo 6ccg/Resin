@@ -9,6 +9,7 @@ type DataTableProps<T> = {
     getRowId?: (row: T) => string;
     className?: string;
     wrapClassName?: string;
+    useColumnWidths?: boolean;
 };
 
 export function DataTable<T>({
@@ -19,6 +20,7 @@ export function DataTable<T>({
     getRowId,
     className,
     wrapClassName,
+    useColumnWidths = false,
 }: DataTableProps<T>) {
     // TanStack Table returns mutable table helpers; React Compiler intentionally skips memoizing here.
     // eslint-disable-next-line react-hooks/incompatible-library
@@ -36,7 +38,7 @@ export function DataTable<T>({
                     {table.getHeaderGroups().map((headerGroup) => (
                         <tr key={headerGroup.id}>
                             {headerGroup.headers.map((header) => (
-                                <th key={header.id}>
+                                <th key={header.id} style={useColumnWidths ? { width: header.getSize() } : undefined}>
                                     {header.isPlaceholder ? null : flexRender(header.column.columnDef.header, header.getContext())}
                                 </th>
                             ))}

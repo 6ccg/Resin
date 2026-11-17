@@ -47,6 +47,23 @@ It helps shield your services from unstable underlying proxy nodes by aggregatin
 
 ## 🔌 Supported Protocols and Subscription Formats
 
+### Node diagnostics
+
+- The node list shows success rates for the latest 50 general health probes. Node details include consecutive probe failures, mean successful duration, duration standard deviation, and recent checks. Samples persist with node state.
+- Add one HTTP/HTTPS URL per line under **System Settings → Probing and Routing → Target Reachability**. Configured targets run alongside periodic latency probes and can also be queued for all nodes.
+- Node details support manual target checks with optional expected HTTP status codes. Periodic checks accept 2xx/3xx, do not follow redirects, and read only response headers. Target results do not affect the global circuit breaker.
+- Probe statistics are separate from real proxy traffic. Request logs record network outcomes and visible HTTP status codes by default; existing traffic success aggregates are global/per-platform. CONNECT and SOCKS5 HTTPS tunnels cannot expose application response statuses.
+
+### Entry/exit management and exports
+
+- The node directory separates connection entries from measured exit IPs. Combine entry host/IP, exit IP/CIDR, included/excluded countries, company, ASN, network type, hosting, and check validity filters. Education matches either company or ASN classifications; unknown hosting does not count as false.
+- Switch to **Exit View** and select an IP to find its entry nodes. Entry IPs are DNS snapshots. Exit attributes are tied to the measured IP, source, and timestamp; changed or expired samples become unknown for filtering and export.
+- **Batch Checks and Export** supports all matching nodes, all nodes, or selected nodes. Retest latency, exit IPs, exit attributes, and configured targets with progress and cancellation of pending checks.
+- Export TXT/URI, Base64 URI, CSV, full JSON, sing-box JSON, or Clash YAML. Entries and complete credentials are preserved; names follow `[country code][network type][company/provider]`. Missing or expired attributes use `unknown`; duplicate sing-box/Clash names receive a numeric suffix.
+- Exports default to nodes with valid checks and optionally keep one node per exit. Unsupported TXT/Clash conversions are listed with reasons; use sing-box/full JSON to preserve complex options. Exporting does not run probes.
+- Manage concurrency, timeout, periodic checks, keepalive, recovery backoff, consecutive recovery successes, and validity periods in system settings. Changes apply when saved. `RESIN_PROBE_CONCURRENCY` and `RESIN_PROBE_TIMEOUT` have been removed; existing databases receive the new defaults through the migration tool.
+- Attribute adapters implement `internal/probe/attributes.Provider`. Check Host is included. Registered adapters appear automatically in settings, where endpoints can be edited.
+
 ### Subscription sources
 
 - Remote subscription URL: `http://` or `https://`.

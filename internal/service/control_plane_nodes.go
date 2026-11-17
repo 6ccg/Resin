@@ -15,19 +15,43 @@ import (
 
 // NodeFilters holds query filters for listing nodes.
 type NodeFilters struct {
-	PlatformID     *string
-	SubscriptionID *string
-	Enabled        *bool
-	Region         *string
-	CircuitOpen    *bool
-	HasOutbound    *bool
-	EgressIP       *string
-	ProbedSince    *time.Time
-	TagKeyword     *string
+	PlatformID     *string    `json:"platform_id,omitempty"`
+	SubscriptionID *string    `json:"subscription_id,omitempty"`
+	Enabled        *bool      `json:"enabled,omitempty"`
+	Region         *string    `json:"region,omitempty"`
+	CircuitOpen    *bool      `json:"circuit_open,omitempty"`
+	HasOutbound    *bool      `json:"has_outbound,omitempty"`
+	EgressIP       *string    `json:"egress_ip,omitempty"`
+	ProbedSince    *time.Time `json:"probed_since,omitempty"`
+	TagKeyword     *string    `json:"tag_keyword,omitempty"`
+	EntryKeyword   *string    `json:"entry_keyword,omitempty"`
+	NetworkTypes   []string   `json:"network_types,omitempty"`
+	ExcludeRegions []string   `json:"exclude_regions,omitempty"`
+	Hosting        *bool      `json:"hosting,omitempty"`
+	HostingUnknown bool       `json:"hosting_unknown,omitempty"`
+	CompanyKeyword *string    `json:"company_keyword,omitempty"`
+	ASNKeyword     *string    `json:"asn_keyword,omitempty"`
+	Validity       string     `json:"validity,omitempty"`
+	NodeHashes     []string   `json:"node_hashes,omitempty"`
 }
 
 // ListNodes returns nodes from the pool with optional filters.
 func (s *ControlPlaneService) ListNodes(filters NodeFilters) ([]NodeSummary, error) {
+	result := make([]NodeSummary, 0)
+	err := s.rangeFilteredNodes(filters, func(h node.Hash, entry *node.NodeEntry) {
+		result = append(result, s.nodeEntryToSummary(h, entry))
+	})
+	return result, err
+}
+
+// rangeFilteredNodes keeps selection shared by pages, exports and probe jobs.
+// Callers choose which data to build instead of always materializing full details.
+func (s *ControlPlaneService) rangeFilteredNodes(filters NodeFilters, visit func(node.Hash, *node.NodeEntry)) error {
+	for _, field := range []**string{&filters.PlatformID, &filters.SubscriptionID, &filters.TagKeyword, &filters.Region, &filters.EgressIP, &filters.EntryKeyword, &filters.CompanyKeyword, &filters.ASNKeyword} {
+		if *field != nil && strings.TrimSpace(**field) == "" {
+			*field = nil
+		}
+	}
 	var subLookup node.SubLookupFunc
 	if s != nil && s.Pool != nil {
 		subLookup = s.Pool.MakeSubLookup()
@@ -38,7 +62,7 @@ func (s *ControlPlaneService) ListNodes(filters NodeFilters) ([]NodeSummary, err
 	if filters.PlatformID != nil {
 		plat, ok := s.Pool.GetPlatform(*filters.PlatformID)
 		if !ok {
-			return nil, notFound("platform not found")
+			return notFound("platform not found")
 		}
 		platformView = make(map[node.Hash]struct{}, plat.View().Size())
 		plat.View().Range(func(h node.Hash) bool {
@@ -51,7 +75,7 @@ func (s *ControlPlaneService) ListNodes(filters NodeFilters) ([]NodeSummary, err
 	if filters.SubscriptionID != nil {
 		sub := s.SubMgr.Lookup(*filters.SubscriptionID)
 		if sub == nil {
-			return nil, notFound("subscription not found")
+			return notFound("subscription not found")
 		}
 		subNodes = make(map[node.Hash]struct{})
 		sub.ManagedNodes().RangeNodes(func(h node.Hash, managed subscription.ManagedNode) bool {
@@ -63,12 +87,11 @@ func (s *ControlPlaneService) ListNodes(filters NodeFilters) ([]NodeSummary, err
 		})
 	}
 
-	var result []NodeSummary
 	appendIfMatched := func(h node.Hash, entry *node.NodeEntry) {
 		if !s.nodeEntryMatchesFilters(entry, filters, subLookup) {
 			return
 		}
-		result = append(result, s.nodeEntryToSummary(h, entry))
+		visit(h, entry)
 	}
 
 	appendIfMatchedHash := func(h node.Hash) {
@@ -80,6 +103,29 @@ func (s *ControlPlaneService) ListNodes(filters NodeFilters) ([]NodeSummary, err
 	}
 
 	switch {
+	case len(filters.NodeHashes) > 0:
+		seen := make(map[node.Hash]struct{}, len(filters.NodeHashes))
+		for _, raw := range filters.NodeHashes {
+			h, err := node.ParseHex(raw)
+			if err != nil {
+				return invalidArg("node_hashes: invalid node hash")
+			}
+			if _, ok := seen[h]; ok {
+				continue
+			}
+			seen[h] = struct{}{}
+			if platformView != nil {
+				if _, ok := platformView[h]; !ok {
+					continue
+				}
+			}
+			if subNodes != nil {
+				if _, ok := subNodes[h]; !ok {
+					continue
+				}
+			}
+			appendIfMatchedHash(h)
+		}
 	case platformView != nil && subNodes != nil:
 		// Iterate the smaller candidate set, then intersect by membership.
 		if len(platformView) <= len(subNodes) {
@@ -112,10 +158,7 @@ func (s *ControlPlaneService) ListNodes(filters NodeFilters) ([]NodeSummary, err
 		})
 	}
 
-	if result == nil {
-		result = []NodeSummary{}
-	}
-	return result, nil
+	return nil
 }
 
 func (s *ControlPlaneService) nodeEntryMatchesFilters(
@@ -123,6 +166,9 @@ func (s *ControlPlaneService) nodeEntryMatchesFilters(
 	filters NodeFilters,
 	subLookup node.SubLookupFunc,
 ) bool {
+	if !s.nodeMatchesInspection(entry, filters) {
+		return false
+	}
 	// Enabled/disabled filter.
 	if filters.Enabled != nil {
 		enabled := true
@@ -168,11 +214,8 @@ func (s *ControlPlaneService) nodeEntryMatchesFilters(
 
 	// Region filter.
 	if filters.Region != nil {
-		region := entry.GetRegion(nil)
-		if s.GeoIP != nil {
-			region = entry.GetRegion(s.GeoIP.Lookup)
-		}
-		if region == "" || region != *filters.Region {
+		region := s.nodeRegion(entry)
+		if !matchesCSV(region, *filters.Region) {
 			return false
 		}
 	}
@@ -191,7 +234,7 @@ func (s *ControlPlaneService) nodeEntryMatchesFilters(
 	// Egress IP filter.
 	if filters.EgressIP != nil {
 		egressIP := entry.GetEgressIP()
-		if !egressIP.IsValid() || egressIP.String() != *filters.EgressIP {
+		if !egressIP.IsValid() || !matchesIPSearch(egressIP.String(), *filters.EgressIP) {
 			return false
 		}
 	}
@@ -233,10 +276,7 @@ func (s *ControlPlaneService) ProbeEgress(hashStr string) (*probe.EgressProbeRes
 	if err != nil {
 		return nil, internal("egress probe failed", err)
 	}
-	result.Region = entry.GetRegion(nil)
-	if s.GeoIP != nil {
-		result.Region = entry.GetRegion(s.GeoIP.Lookup)
-	}
+	result.Region = s.nodeRegion(entry)
 	return result, nil
 }
 

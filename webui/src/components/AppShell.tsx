@@ -1,4 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
+import { Suspense } from "react";
 import {
   AlertTriangle,
   Cable,
@@ -166,7 +167,7 @@ export function AppShell() {
           transition={{ duration: 0.24, ease: "easeOut" }}
           className="content"
         >
-          <Outlet />
+          <Suspense fallback={<p role="status" className="muted">{t("正在加载页面...")}</p>}><Outlet /></Suspense>
         </motion.div>
       </main>
     </div>

@@ -85,6 +85,20 @@ var runtimeConfigAllowedFields = map[string]bool{
 	"max_egress_test_interval":                 true,
 	"latency_test_url":                         true,
 	"latency_authorities":                      true,
+	"reachability_targets":                     true,
+	"probe_enabled":                            true,
+	"probe_concurrency":                        true,
+	"probe_timeout":                            true,
+	"keepalive_enabled":                        true,
+	"keepalive_interval":                       true,
+	"recovery_probe_interval":                  true,
+	"recovery_probe_max_interval":              true,
+	"recovery_success_threshold":               true,
+	"node_validity_ttl":                        true,
+	"egress_attributes_enabled":                true,
+	"egress_attributes_provider":               true,
+	"egress_attributes_url":                    true,
+	"egress_attributes_interval":               true,
 	"p2c_latency_window":                       true,
 	"latency_decay_window":                     true,
 	"cache_flush_interval":                     true,
@@ -145,6 +159,7 @@ func copyRuntimeConfig(cfg *config.RuntimeConfig) *config.RuntimeConfig {
 	}
 	out := *cfg
 	out.LatencyAuthorities = append([]string(nil), cfg.LatencyAuthorities...)
+	out.ReachabilityTargets = append([]string(nil), cfg.ReachabilityTargets...)
 	return &out
 }
 
@@ -193,6 +208,47 @@ func (s *ControlPlaneService) PatchRuntimeConfig(patchJSON json.RawMessage) (*co
 }
 
 func validateRuntimeConfig(cfg *config.RuntimeConfig) *ServiceError {
+	if cfg.ProbeConcurrency < 1 || cfg.ProbeConcurrency > 256 {
+		return invalidArg("probe_concurrency: must be between 1 and 256")
+	}
+	if cfg.ProbeTimeout < config.Duration(time.Second) || cfg.ProbeTimeout > config.Duration(2*time.Minute) {
+		return invalidArg("probe_timeout: must be between 1s and 2m")
+	}
+	if cfg.RecoverySuccessThreshold < 1 {
+		return invalidArg("recovery_success_threshold: must be >= 1")
+	}
+	for name, value := range map[string]config.Duration{
+		"keepalive_interval": cfg.KeepaliveInterval, "recovery_probe_interval": cfg.RecoveryProbeInterval,
+		"egress_attributes_interval": cfg.EgressAttributesInterval, "node_validity_ttl": cfg.NodeValidityTTL,
+	} {
+		if value < config.Duration(30*time.Second) {
+			return invalidArg(name + ": must be >= 30s")
+		}
+	}
+	if cfg.RecoveryProbeMaxInterval < cfg.RecoveryProbeInterval {
+		return invalidArg("recovery_probe_max_interval: must be >= recovery_probe_interval")
+	}
+	cfg.EgressAttributesProvider = strings.TrimSpace(cfg.EgressAttributesProvider)
+	cfg.EgressAttributesURL = strings.TrimSpace(cfg.EgressAttributesURL)
+	if !probe.IsAttributeProvider(cfg.EgressAttributesProvider) {
+		return invalidArg("egress_attributes_provider: unsupported provider")
+	}
+	if _, err := parseHTTPAbsoluteURL("egress_attributes_url", strings.TrimSpace(cfg.EgressAttributesURL)); err != nil {
+		return err
+	}
+	seenTargets := make(map[string]bool)
+	targets := make([]string, 0, len(cfg.ReachabilityTargets))
+	for _, raw := range cfg.ReachabilityTargets {
+		target := strings.TrimSpace(raw)
+		if _, err := parseHTTPAbsoluteURL("reachability_targets", target); err != nil {
+			return err
+		}
+		if !seenTargets[target] {
+			targets = append(targets, target)
+			seenTargets[target] = true
+		}
+	}
+	cfg.ReachabilityTargets = targets
 	latencyURL := strings.TrimSpace(cfg.LatencyTestURL)
 	u, verr := parseHTTPAbsoluteURL("latency_test_url", latencyURL)
 	if verr != nil {

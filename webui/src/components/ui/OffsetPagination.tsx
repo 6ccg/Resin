@@ -1,5 +1,6 @@
-import { useMemo } from "react";
+import { useState } from "react";
 import { Button } from "./Button";
+import { Input } from "./Input";
 import { Select } from "./Select";
 import { useI18n } from "../../i18n";
 
@@ -30,11 +31,10 @@ export function OffsetPagination({
   const pageStart = totalItems === 0 ? 0 : normalizedPage * pageSize + 1;
   const pageEnd = Math.min((normalizedPage + 1) * pageSize, totalItems);
 
-  const pageOptions = useMemo(() => {
-    return Array.from({ length: normalizedTotalPages }, (_, index) => index);
-  }, [normalizedTotalPages]);
+  const [jumpValue, setJumpValue] = useState<string | null>(null);
 
   const jumpTo = (nextPage: number) => {
+    setJumpValue(null);
     const bounded = Math.min(Math.max(nextPage, 0), normalizedTotalPages - 1);
     onPageChange(bounded);
   };
@@ -64,18 +64,22 @@ export function OffsetPagination({
 
         <label className="nodes-page-jump">
           <span>{t("跳至")}</span>
-          <Select
-            value={String(normalizedPage)}
-            onChange={(event) => jumpTo(Number(event.target.value))}
+          <Input
+            type="number"
+            min={1}
+            max={normalizedTotalPages}
+            step={1}
+            value={jumpValue ?? String(normalizedPage + 1)}
+            onChange={(event) => setJumpValue(event.target.value)}
+            onBlur={(event) => {
+              const value = Number(event.target.value);
+              if (event.target.value && Number.isFinite(value)) jumpTo(Math.trunc(value) - 1);
+              else setJumpValue(null);
+            }}
+            onKeyDown={(event) => { if (event.key === "Enter") event.currentTarget.blur(); }}
             aria-label={t("选择页码")}
             disabled={disabled}
-          >
-            {pageOptions.map((index) => (
-              <option key={index} value={index}>
-                {index + 1}
-              </option>
-            ))}
-          </Select>
+          />
           <span>{t("页")}</span>
         </label>
 

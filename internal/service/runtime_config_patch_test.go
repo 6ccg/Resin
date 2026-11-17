@@ -252,6 +252,26 @@ func TestPatchRuntimeConfig_DoesNotMutateOldSliceSnapshot(t *testing.T) {
 	}
 }
 
+func TestPatchRuntimeConfig_ReachabilityTargets(t *testing.T) {
+	h := newPatchHarness(t)
+	before := h.runtimeCfg.Load()
+	after, err := h.cp.PatchRuntimeConfig([]byte(`{"reachability_targets":[" https://example.com/health ","https://example.com/health"]}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(before.ReachabilityTargets) != 0 || !reflect.DeepEqual(after.ReachabilityTargets, []string{"https://example.com/health"}) {
+		t.Fatalf("target normalization changed old snapshot or failed: %+v", after.ReachabilityTargets)
+	}
+	persisted, _, err := h.engine.GetSystemConfig()
+	if err != nil || !reflect.DeepEqual(persisted.ReachabilityTargets, after.ReachabilityTargets) {
+		t.Fatalf("targets not persisted: %+v, %v", persisted, err)
+	}
+	_, err = h.cp.PatchRuntimeConfig([]byte(`{"reachability_targets":["example.com"]}`))
+	if err == nil || h.runtimeCfg.Load() != after {
+		t.Fatal("invalid target patch changed the live configuration")
+	}
+}
+
 type logCaptureEmitter struct {
 	logs int
 	last proxy.RequestLogEntry

@@ -6,12 +6,13 @@ import { Button } from "../../components/ui/Button";
 import { Card } from "../../components/ui/Card";
 import { Input } from "../../components/ui/Input";
 import { Switch } from "../../components/ui/Switch";
+import { Select } from "../../components/ui/Select";
 import { Textarea } from "../../components/ui/Textarea";
 import { ToastContainer } from "../../components/ui/Toast";
 import { useToast } from "../../hooks/useToast";
 import i18next, { useI18n } from "../../i18n";
 import { formatApiErrorMessage } from "../../lib/error-message";
-import { getEnvConfig, patchSystemConfig, getSystemConfig, getDefaultSystemConfig } from "./api";
+import { getEnvConfig, patchSystemConfig, getSystemConfig, getDefaultSystemConfig, getAttributeProviders } from "./api";
 import type { RuntimeConfig, RuntimeConfigPatch } from "./types";
 
 type RuntimeConfigForm = {
@@ -27,6 +28,20 @@ type RuntimeConfigForm = {
   max_egress_test_interval: string;
   latency_test_url: string;
   latency_authorities_raw: string;
+  reachability_targets_raw: string;
+  probe_enabled: boolean;
+  probe_concurrency: string;
+  probe_timeout: string;
+  keepalive_enabled: boolean;
+  keepalive_interval: string;
+  recovery_probe_interval: string;
+  recovery_probe_max_interval: string;
+  recovery_success_threshold: string;
+  node_validity_ttl: string;
+  egress_attributes_enabled: boolean;
+  egress_attributes_provider: string;
+  egress_attributes_url: string;
+  egress_attributes_interval: string;
   p2c_latency_window: string;
   latency_decay_window: string;
   cache_flush_interval: string;
@@ -46,6 +61,10 @@ const EDITABLE_FIELDS: Array<keyof RuntimeConfig> = [
   "max_egress_test_interval",
   "latency_test_url",
   "latency_authorities",
+  "reachability_targets",
+  "probe_enabled", "probe_concurrency", "probe_timeout", "keepalive_enabled", "keepalive_interval",
+  "recovery_probe_interval", "recovery_probe_max_interval", "recovery_success_threshold", "node_validity_ttl",
+  "egress_attributes_enabled", "egress_attributes_provider", "egress_attributes_url", "egress_attributes_interval",
   "p2c_latency_window",
   "latency_decay_window",
   "cache_flush_interval",
@@ -65,6 +84,20 @@ const FIELD_LABELS: Record<keyof RuntimeConfig, string> = {
   max_egress_test_interval: "出口 IP 更新检查间隔",
   latency_test_url: "延迟测试目标 URL",
   latency_authorities: "延迟测试权威域名列表",
+  reachability_targets: "指定目标可达性",
+  probe_enabled: "启用定期探活",
+  probe_concurrency: "探测并发数",
+  probe_timeout: "探测超时",
+  keepalive_enabled: "启用持续保活",
+  keepalive_interval: "持续保活间隔",
+  recovery_probe_interval: "失败恢复初始间隔",
+  recovery_probe_max_interval: "失败恢复最大间隔",
+  recovery_success_threshold: "恢复所需连续成功次数",
+  node_validity_ttl: "检测有效期",
+  egress_attributes_enabled: "定期检测出口属性",
+  egress_attributes_provider: "出口属性检测接口",
+  egress_attributes_url: "出口属性接口地址",
+  egress_attributes_interval: "出口属性刷新间隔",
   p2c_latency_window: "P2C 延迟衰减窗口",
   latency_decay_window: "历史延迟衰减窗口",
   cache_flush_interval: "缓存异步刷盘间隔",
@@ -76,6 +109,12 @@ const ALLOCATION_POLICY_LABELS: Record<string, string> = {
   PREFER_LOW_LATENCY: "优先低延迟",
   PREFER_IDLE_IP: "优先空闲出口 IP",
 };
+
+const PROBE_SETTING_FIELDS = [
+  "probe_enabled", "probe_concurrency", "probe_timeout", "keepalive_enabled", "keepalive_interval",
+  "recovery_probe_interval", "recovery_probe_max_interval", "recovery_success_threshold", "node_validity_ttl",
+  "egress_attributes_enabled", "egress_attributes_provider", "egress_attributes_url", "egress_attributes_interval",
+] as const;
 
 const MISS_ACTION_LABELS: Record<string, string> = {
   TREAT_AS_EMPTY: "按空账号处理",
@@ -102,6 +141,20 @@ function configToForm(config: RuntimeConfig): RuntimeConfigForm {
     max_egress_test_interval: config.max_egress_test_interval,
     latency_test_url: config.latency_test_url,
     latency_authorities_raw: config.latency_authorities.join("\n"),
+    reachability_targets_raw: config.reachability_targets.join("\n"),
+    probe_enabled: config.probe_enabled,
+    probe_concurrency: String(config.probe_concurrency),
+    probe_timeout: config.probe_timeout,
+    keepalive_enabled: config.keepalive_enabled,
+    keepalive_interval: config.keepalive_interval,
+    recovery_probe_interval: config.recovery_probe_interval,
+    recovery_probe_max_interval: config.recovery_probe_max_interval,
+    recovery_success_threshold: String(config.recovery_success_threshold),
+    node_validity_ttl: config.node_validity_ttl,
+    egress_attributes_enabled: config.egress_attributes_enabled,
+    egress_attributes_provider: config.egress_attributes_provider,
+    egress_attributes_url: config.egress_attributes_url,
+    egress_attributes_interval: config.egress_attributes_interval,
     p2c_latency_window: config.p2c_latency_window,
     latency_decay_window: config.latency_decay_window,
     cache_flush_interval: config.cache_flush_interval,
@@ -153,6 +206,19 @@ function parseForm(form: RuntimeConfigForm): RuntimeConfig {
 
   return {
     request_log_enabled: form.request_log_enabled,
+    probe_enabled: form.probe_enabled,
+    probe_concurrency: parseNonNegativeInt("探测并发数", form.probe_concurrency),
+    probe_timeout: form.probe_timeout.trim(),
+    keepalive_enabled: form.keepalive_enabled,
+    keepalive_interval: form.keepalive_interval.trim(),
+    recovery_probe_interval: form.recovery_probe_interval.trim(),
+    recovery_probe_max_interval: form.recovery_probe_max_interval.trim(),
+    recovery_success_threshold: parseNonNegativeInt("恢复所需连续成功次数", form.recovery_success_threshold),
+    node_validity_ttl: form.node_validity_ttl.trim(),
+    egress_attributes_enabled: form.egress_attributes_enabled,
+    egress_attributes_provider: form.egress_attributes_provider.trim(),
+    egress_attributes_url: form.egress_attributes_url.trim(),
+    egress_attributes_interval: form.egress_attributes_interval.trim(),
     reverse_proxy_log_detail_enabled: form.reverse_proxy_log_detail_enabled,
     reverse_proxy_log_req_headers_max_bytes: parseNonNegativeInt(
       "请求头最大字节数",
@@ -176,6 +242,7 @@ function parseForm(form: RuntimeConfigForm): RuntimeConfig {
     max_egress_test_interval: parseDurationField("出口 IP 更新检查间隔", form.max_egress_test_interval),
     latency_test_url: latencyURL,
     latency_authorities: parseAuthorities(form.latency_authorities_raw),
+    reachability_targets: Array.from(new Set(form.reachability_targets_raw.split(/\r?\n/).map((url) => url.trim()).filter(Boolean))),
     p2c_latency_window: parseDurationField("P2C 延迟衰减窗口", form.p2c_latency_window),
     latency_decay_window: parseDurationField("历史延迟衰减窗口", form.latency_decay_window),
     cache_flush_interval: parseDurationField("缓存异步刷盘间隔", form.cache_flush_interval),
@@ -231,6 +298,7 @@ function buildPatch(current: RuntimeConfig, next: RuntimeConfig): RuntimeConfigP
 }
 
 export function SystemConfigPage() {
+  const attributeProviders = useQuery({ queryKey: ["attribute-providers"], queryFn: getAttributeProviders });
   const { t } = useI18n();
   const [draftForm, setDraftForm] = useState<RuntimeConfigForm | null>(null);
   const [customPatchText, setCustomPatchText] = useState<string | null>(null);
@@ -573,6 +641,24 @@ export function SystemConfigPage() {
               <section className="syscfg-section">
                 <h4>{t("探测与路由")}</h4>
                 <div className="form-grid">
+                  {PROBE_SETTING_FIELDS.map((key) => (
+                    <div className="field-group" key={key}>
+                      <div style={{ display: "flex", alignItems: "center" }}>
+                        <label className="field-label" htmlFor={`sys-${key}`} style={{ margin: 0 }}>{t(FIELD_LABELS[key])}</label>
+                        {renderRestoreButton(key)}
+                      </div>
+                      {key === "egress_attributes_provider" ? (
+                        <Select id={`sys-${key}`} value={form[key]} onChange={(event) => { setFormField(key, event.target.value); const provider = attributeProviders.data?.find((item) => item.id === event.target.value); if (provider) setFormField("egress_attributes_url", provider.default_url); }}>
+                          {(attributeProviders.data ?? [{ id: "check-host", name: "Check Host" }]).map((provider) => <option key={provider.id} value={provider.id}>{provider.name}</option>)}
+                        </Select>
+                      ) : typeof form[key] === "boolean" ? (
+                        <Switch id={`sys-${key}`} checked={Boolean(form[key])} onChange={(event) => setFormField(key, event.target.checked)} />
+                      ) : (
+                        <Input id={`sys-${key}`} value={String(form[key])} onChange={(event) => setFormField(key, event.target.value)} />
+                      )}
+                    </div>
+                  ))}
+                  <p className="muted field-span-2">{t("定期探活关闭时仍可手动检测。持续保活使用更短间隔；故障节点按恢复间隔逐步延长重试，达到连续成功次数后恢复。设置保存后生效。")}</p>
                   <div className="field-group field-span-2">
                     <div style={{ display: "flex", alignItems: "center" }}>
                       <label className="field-label" htmlFor="sys-latency-url" style={{ margin: 0 }}>
@@ -585,6 +671,23 @@ export function SystemConfigPage() {
                       value={form.latency_test_url}
                       onChange={(event) => setFormField("latency_test_url", event.target.value)}
                     />
+                  </div>
+
+                  <div className="field-group field-span-2">
+                    <div style={{ display: "flex", alignItems: "center" }}>
+                      <label className="field-label" htmlFor="sys-reachability-targets" style={{ margin: 0 }}>
+                        {t("指定目标可达性")}
+                      </label>
+                      {renderRestoreButton("reachability_targets_raw")}
+                    </div>
+                    <Textarea
+                      id="sys-reachability-targets"
+                      rows={3}
+                      value={form.reachability_targets_raw}
+                      placeholder="https://example.com/health"
+                      onChange={(event) => setFormField("reachability_targets_raw", event.target.value)}
+                    />
+                    <p className="muted">{t("每行一个 HTTP/HTTPS 地址，留空关闭。随定期延迟探测执行；HTTP 2xx/3xx 视为可达，不跟随重定向。结果独立于节点熔断。")}</p>
                   </div>
 
                   <div className="field-group">
@@ -769,14 +872,6 @@ export function SystemConfigPage() {
                     <div className="field-group">
                       <label className="field-label" style={{ margin: 0 }}>{t("最大延迟表条目数")}</label>
                       <Input readOnly disabled value={String(envBaseline.max_latency_table_entries)} />
-                    </div>
-                    <div className="field-group">
-                      <label className="field-label" style={{ margin: 0 }}>{t("节点拨测并发数")}</label>
-                      <Input readOnly disabled value={String(envBaseline.probe_concurrency)} />
-                    </div>
-                    <div className="field-group">
-                      <label className="field-label" style={{ margin: 0 }}>{t("拨测超时时间")}</label>
-                      <Input readOnly disabled value={envBaseline.probe_timeout} />
                     </div>
                     <div className="field-group">
                       <label className="field-label" style={{ margin: 0 }}>{t("资源获取超时时间")}</label>

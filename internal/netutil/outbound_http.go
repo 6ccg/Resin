@@ -34,6 +34,12 @@ type OutboundHTTPOptions struct {
 	// lifecycle for metrics. Set by probe callers to count outbound connections;
 	// left nil for download callers (GeoIP, subscription) to exclude from stats.
 	OnConnLifecycle func(op ConnLifecycleOp)
+	// HeadersOnly is used by reachability checks, which do not download the body.
+	HeadersOnly bool
+	// OnResponse observes the status of the requested URL before its body is read.
+	OnResponse func(status int)
+	// DisableRedirects keeps a redirect response attributable to the requested URL.
+	DisableRedirects bool
 }
 
 // HTTPGetViaOutbound executes an HTTP GET through the provided outbound.
@@ -67,6 +73,9 @@ func HTTPGetViaOutbound(
 	client := &http.Client{
 		Transport: transport,
 	}
+	if opts.DisableRedirects {
+		client.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
+	}
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
@@ -91,16 +100,28 @@ func HTTPGetViaOutbound(
 	}
 	req = req.WithContext(httptrace.WithClientTrace(ctx, trace))
 
+	requestStart := time.Now()
 	resp, err := client.Do(req)
 	if err != nil {
 		return nil, 0, err
 	}
 	defer resp.Body.Close()
+	// Prefer the TLS handshake measurement. Plain HTTP and reused TLS
+	// connections use the time until response headers arrive instead.
+	if latency <= 0 {
+		latency = time.Since(requestStart)
+	}
+	if opts.OnResponse != nil {
+		opts.OnResponse(resp.StatusCode)
+	}
 
 	if opts.RequireStatusOK && resp.StatusCode != http.StatusOK {
 		return nil, latency, fmt.Errorf("outbound fetch: unexpected status %d from %s", resp.StatusCode, url)
 	}
 
+	if opts.HeadersOnly {
+		return nil, latency, nil
+	}
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
 		return nil, latency, err

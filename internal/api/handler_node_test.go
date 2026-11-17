@@ -1,6 +1,7 @@
 package api
 
 import (
+	"fmt"
 	"net/http"
 	"net/netip"
 	"testing"
@@ -13,6 +14,47 @@ import (
 	"github.com/Resinat/Resin/internal/subscription"
 	"github.com/Resinat/Resin/internal/testutil"
 )
+
+func TestHandleListNodes_SortBeforePagination(t *testing.T) {
+	srv, cp, _ := newControlPlaneTestServer(t)
+	sub := subscription.NewSubscription("11111111-1111-1111-1111-111111111111", "source", "", true, false)
+	cp.SubMgr.Register(sub)
+	hashes := map[string]string{}
+	for i, tag := range []string{"Charlie", "Alpha", "Bravo"} {
+		raw := fmt.Sprintf(`{"type":"http","server":"192.0.2.%d","server_port":8080}`, i+1)
+		addNodeForNodeListTestWithTag(t, cp, sub, raw, fmt.Sprintf("203.0.113.%d", i+1), tag)
+		h := node.HashFromRawOptions([]byte(raw))
+		hashes[tag] = h.Hex()
+		entry, _ := cp.Pool.GetEntry(h)
+		entry.FailureCount.Store(int32(i))
+		entry.CreatedAt = time.Unix(int64(i+1), 0)
+		entry.SetEgressRegion([]string{"us", "de", "jp"}[i])
+	}
+	for _, tc := range []struct{ query, want string }{
+		{"sort_by=tag&offset=1", "Bravo"},
+		{"sort_by=tag&sort_order=desc", "Charlie"},
+		{"sort_by=failure_count&sort_order=desc", "Bravo"},
+		{"sort_by=created_at&sort_order=desc", "Bravo"},
+		{"sort_by=region&offset=1", "Bravo"},
+	} {
+		t.Run(tc.query, func(t *testing.T) {
+			response := doJSONRequest(t, srv, http.MethodGet, "/api/v1/nodes?limit=1&"+tc.query, nil, true)
+			if response.Code != http.StatusOK {
+				t.Fatal(response.Body.String())
+			}
+			body := decodeJSONMap(t, response)
+			items := body["items"].([]any)
+			if body["total"] != float64(3) || body["unique_egress_ips"] != float64(3) || len(items) != 1 || items[0].(map[string]any)["node_hash"] != hashes[tc.want] {
+				t.Fatalf("incorrect page: %s", response.Body.String())
+			}
+		})
+	}
+	response := doJSONRequest(t, srv, http.MethodGet, "/api/v1/nodes?limit=1&offset=99", nil, true)
+	body := decodeJSONMap(t, response)
+	if body["total"] != float64(3) || len(body["items"].([]any)) != 0 {
+		t.Fatalf("out-of-range page lost total: %s", response.Body.String())
+	}
+}
 
 func addNodeForNodeListTest(t *testing.T, cp *service.ControlPlaneService, sub *subscription.Subscription, raw string, egressIP string) {
 	addNodeForNodeListTestWithTag(t, cp, sub, raw, egressIP, "tag")

@@ -16,7 +16,6 @@ type systemEnvConfigResponse struct {
 	ResinPort                                       int             `json:"resin_port"`
 	APIMaxBodyBytes                                 int             `json:"api_max_body_bytes"`
 	MaxLatencyTableEntries                          int             `json:"max_latency_table_entries"`
-	ProbeConcurrency                                int             `json:"probe_concurrency"`
 	GeoIPUpdateSchedule                             string          `json:"geoip_update_schedule"`
 	DefaultPlatformStickyTTL                        config.Duration `json:"default_platform_sticky_ttl"`
 	DefaultPlatformRegexFilters                     []string        `json:"default_platform_regex_filters"`
@@ -25,7 +24,6 @@ type systemEnvConfigResponse struct {
 	DefaultPlatformReverseProxyEmptyAccountBehavior string          `json:"default_platform_reverse_proxy_empty_account_behavior"`
 	DefaultPlatformReverseProxyFixedAccountHeader   string          `json:"default_platform_reverse_proxy_fixed_account_header"`
 	DefaultPlatformAllocationPolicy                 string          `json:"default_platform_allocation_policy"`
-	ProbeTimeout                                    config.Duration `json:"probe_timeout"`
 	ResourceFetchTimeout                            config.Duration `json:"resource_fetch_timeout"`
 	NodeDNSUpstreams                                []string        `json:"node_dns_upstreams"`
 	ProxyTransportMaxIdleConns                      int             `json:"proxy_transport_max_idle_conns"`
@@ -115,7 +113,6 @@ func systemEnvConfigSnapshot(envCfg *config.EnvConfig) *systemEnvConfigResponse 
 		ResinPort:                             envCfg.ResinPort,
 		APIMaxBodyBytes:                       envCfg.APIMaxBodyBytes,
 		MaxLatencyTableEntries:                envCfg.MaxLatencyTableEntries,
-		ProbeConcurrency:                      envCfg.ProbeConcurrency,
 		GeoIPUpdateSchedule:                   envCfg.GeoIPUpdateSchedule,
 		DefaultPlatformStickyTTL:              config.Duration(envCfg.DefaultPlatformStickyTTL),
 		DefaultPlatformRegexFilters:           append([]string(nil), envCfg.DefaultPlatformRegexFilters...),
@@ -124,7 +121,6 @@ func systemEnvConfigSnapshot(envCfg *config.EnvConfig) *systemEnvConfigResponse 
 		DefaultPlatformReverseProxyEmptyAccountBehavior: envCfg.DefaultPlatformReverseProxyEmptyAccountBehavior,
 		DefaultPlatformReverseProxyFixedAccountHeader:   envCfg.DefaultPlatformReverseProxyFixedAccountHeader,
 		DefaultPlatformAllocationPolicy:                 envCfg.DefaultPlatformAllocationPolicy,
-		ProbeTimeout:                                    config.Duration(envCfg.ProbeTimeout),
 		ResourceFetchTimeout:                            config.Duration(envCfg.ResourceFetchTimeout),
 		NodeDNSUpstreams:                                append([]string(nil), envCfg.NodeDNSUpstreams...),
 		ProxyTransportMaxIdleConns:                      envCfg.ProxyTransportMaxIdleConns,

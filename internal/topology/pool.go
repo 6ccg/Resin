@@ -46,25 +46,27 @@ type GlobalNodePool struct {
 	onNodeLatencyChanged func(hash node.Hash, domain string) // fired on latency upserts and evictions
 
 	// Health config
-	maxLatencyTableEntries int
-	maxConsecutiveFailures func() int
-	latencyDecayWindow     func() time.Duration
-	latencyAuthorities     func() []string
+	maxLatencyTableEntries   int
+	maxConsecutiveFailures   func() int
+	recoverySuccessThreshold func() int
+	latencyDecayWindow       func() time.Duration
+	latencyAuthorities       func() []string
 }
 
 // PoolConfig configures the GlobalNodePool.
 type PoolConfig struct {
-	SubLookup              func(subID string) *subscription.Subscription
-	GeoLookup              platform.GeoLookupFunc
-	OnNodeAdded            func(hash node.Hash)
-	OnNodeRemoved          func(hash node.Hash, entry *node.NodeEntry)
-	OnSubNodeChanged       func(subID string, hash node.Hash, added bool)
-	OnNodeDynamicChanged   func(hash node.Hash)
-	OnNodeLatencyChanged   func(hash node.Hash, domain string)
-	MaxLatencyTableEntries int
-	MaxConsecutiveFailures func() int
-	LatencyDecayWindow     func() time.Duration
-	LatencyAuthorities     func() []string
+	SubLookup                func(subID string) *subscription.Subscription
+	GeoLookup                platform.GeoLookupFunc
+	OnNodeAdded              func(hash node.Hash)
+	OnNodeRemoved            func(hash node.Hash, entry *node.NodeEntry)
+	OnSubNodeChanged         func(subID string, hash node.Hash, added bool)
+	OnNodeDynamicChanged     func(hash node.Hash)
+	OnNodeLatencyChanged     func(hash node.Hash, domain string)
+	MaxLatencyTableEntries   int
+	MaxConsecutiveFailures   func() int
+	RecoverySuccessThreshold func() int
+	LatencyDecayWindow       func() time.Duration
+	LatencyAuthorities       func() []string
 }
 
 var (
@@ -82,20 +84,21 @@ func NewGlobalNodePool(cfg PoolConfig) *GlobalNodePool {
 	}
 
 	return &GlobalNodePool{
-		nodes:                  xsync.NewMap[node.Hash, *node.NodeEntry](),
-		subLookup:              cfg.SubLookup,
-		geoLookup:              cfg.GeoLookup,
-		onNodeAdded:            cfg.OnNodeAdded,
-		onNodeRemoved:          cfg.OnNodeRemoved,
-		onSubNodeChanged:       cfg.OnSubNodeChanged,
-		onNodeDynamicChanged:   cfg.OnNodeDynamicChanged,
-		onNodeLatencyChanged:   cfg.OnNodeLatencyChanged,
-		maxLatencyTableEntries: cfg.MaxLatencyTableEntries,
-		maxConsecutiveFailures: maxConsecutiveFailuresFn,
-		latencyDecayWindow:     cfg.LatencyDecayWindow,
-		latencyAuthorities:     cfg.LatencyAuthorities,
-		platformByID:           make(map[string]*platform.Platform),
-		platformByName:         make(map[string]*platform.Platform),
+		nodes:                    xsync.NewMap[node.Hash, *node.NodeEntry](),
+		subLookup:                cfg.SubLookup,
+		geoLookup:                cfg.GeoLookup,
+		onNodeAdded:              cfg.OnNodeAdded,
+		onNodeRemoved:            cfg.OnNodeRemoved,
+		onSubNodeChanged:         cfg.OnSubNodeChanged,
+		onNodeDynamicChanged:     cfg.OnNodeDynamicChanged,
+		onNodeLatencyChanged:     cfg.OnNodeLatencyChanged,
+		maxLatencyTableEntries:   cfg.MaxLatencyTableEntries,
+		maxConsecutiveFailures:   maxConsecutiveFailuresFn,
+		recoverySuccessThreshold: cfg.RecoverySuccessThreshold,
+		latencyDecayWindow:       cfg.LatencyDecayWindow,
+		latencyAuthorities:       cfg.LatencyAuthorities,
+		platformByID:             make(map[string]*platform.Platform),
+		platformByName:           make(map[string]*platform.Platform),
 	}
 }
 
@@ -511,10 +514,28 @@ func (p *GlobalNodePool) NotifyNodeDirty(hash node.Hash) {
 	p.notifyAllPlatformsDirty(hash)
 }
 
+func (p *GlobalNodePool) NotifyInspectionChanged(hash node.Hash) {
+	if p.onNodeDynamicChanged != nil {
+		p.onNodeDynamicChanged(hash)
+	}
+}
+
 // RangeNodes iterates over all nodes in the pool.
 // The callback receives each node's hash and entry. Return false to stop.
 func (p *GlobalNodePool) RangeNodes(fn func(node.Hash, *node.NodeEntry) bool) {
 	p.nodes.Range(fn)
+}
+
+// RecordProbeObservation stores bounded diagnostics and schedules persistence.
+func (p *GlobalNodePool) RecordProbeObservation(hash node.Hash, observation node.ProbeObservation) {
+	entry, ok := p.nodes.Load(hash)
+	if !ok {
+		return
+	}
+	entry.RecordProbe(observation)
+	if p.onNodeDynamicChanged != nil {
+		p.onNodeDynamicChanged(hash)
+	}
 }
 
 // RecordResult records a probe or passive health-check result.
@@ -532,6 +553,17 @@ func (p *GlobalNodePool) RecordResult(hash node.Hash, success bool) {
 	circuitStateChanged := false
 
 	if success {
+		threshold := 1
+		if p.recoverySuccessThreshold != nil {
+			threshold = p.recoverySuccessThreshold()
+		}
+		if entry.IsCircuitOpen() && int(entry.RecoverySuccessCount.Add(1)) < threshold {
+			if p.onNodeDynamicChanged != nil {
+				p.onNodeDynamicChanged(hash)
+			}
+			return
+		}
+		entry.RecoverySuccessCount.Store(0)
 		if entry.FailureCount.Swap(0) != 0 {
 			dynamicChanged = true
 		}
@@ -540,6 +572,7 @@ func (p *GlobalNodePool) RecordResult(hash node.Hash, success bool) {
 			circuitStateChanged = true
 		}
 	} else {
+		entry.RecoverySuccessCount.Store(0)
 		newCount := entry.FailureCount.Add(1)
 		dynamicChanged = true
 		maxConsecutiveFailures := p.currentMaxConsecutiveFailures()

@@ -20,8 +20,22 @@ type RuntimeConfig struct {
 	MaxEgressTestInterval           Duration `json:"max_egress_test_interval"`
 
 	// Probe
-	LatencyTestURL     string   `json:"latency_test_url"`
-	LatencyAuthorities []string `json:"latency_authorities"`
+	LatencyTestURL           string   `json:"latency_test_url"`
+	LatencyAuthorities       []string `json:"latency_authorities"`
+	ReachabilityTargets      []string `json:"reachability_targets"`
+	ProbeEnabled             bool     `json:"probe_enabled"`
+	ProbeConcurrency         int      `json:"probe_concurrency"`
+	ProbeTimeout             Duration `json:"probe_timeout"`
+	KeepaliveEnabled         bool     `json:"keepalive_enabled"`
+	KeepaliveInterval        Duration `json:"keepalive_interval"`
+	RecoveryProbeInterval    Duration `json:"recovery_probe_interval"`
+	RecoveryProbeMaxInterval Duration `json:"recovery_probe_max_interval"`
+	RecoverySuccessThreshold int      `json:"recovery_success_threshold"`
+	NodeValidityTTL          Duration `json:"node_validity_ttl"`
+	EgressAttributesEnabled  bool     `json:"egress_attributes_enabled"`
+	EgressAttributesProvider string   `json:"egress_attributes_provider"`
+	EgressAttributesURL      string   `json:"egress_attributes_url"`
+	EgressAttributesInterval Duration `json:"egress_attributes_interval"`
 
 	// P2C
 	P2CLatencyWindow   Duration `json:"p2c_latency_window"`
@@ -48,8 +62,22 @@ func NewDefaultRuntimeConfig() *RuntimeConfig {
 		MaxAuthorityLatencyTestInterval: Duration(3 * time.Hour),
 		MaxEgressTestInterval:           Duration(24 * time.Hour),
 
-		LatencyTestURL:     "https://www.gstatic.com/generate_204",
-		LatencyAuthorities: []string{"gstatic.com", "google.com", "cloudflare.com", "github.com"},
+		LatencyTestURL:           "https://www.gstatic.com/generate_204",
+		LatencyAuthorities:       []string{"gstatic.com", "google.com", "cloudflare.com", "github.com"},
+		ReachabilityTargets:      []string{},
+		ProbeEnabled:             true,
+		ProbeConcurrency:         32,
+		ProbeTimeout:             Duration(15 * time.Second),
+		KeepaliveEnabled:         false,
+		KeepaliveInterval:        Duration(5 * time.Minute),
+		RecoveryProbeInterval:    Duration(time.Minute),
+		RecoveryProbeMaxInterval: Duration(time.Hour),
+		RecoverySuccessThreshold: 1,
+		NodeValidityTTL:          Duration(2 * time.Hour),
+		EgressAttributesEnabled:  true,
+		EgressAttributesProvider: "check-host",
+		EgressAttributesURL:      "https://api.check-host.cc/myinfo",
+		EgressAttributesInterval: Duration(24 * time.Hour),
 
 		P2CLatencyWindow:   Duration(10 * time.Minute),
 		LatencyDecayWindow: Duration(10 * time.Minute),

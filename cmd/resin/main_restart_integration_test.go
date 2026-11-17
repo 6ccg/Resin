@@ -111,6 +111,9 @@ func TestBootstrapRestart_RecoversTopologyAndStickyLease(t *testing.T) {
 	entry1.LastLatencyProbeAttempt.Store(latencyAttemptAt)
 	entry1.LastAuthorityLatencyProbeAttempt.Store(authorityAttemptAt)
 	entry1.FailureCount.Store(2)
+	entry1.RecordProbe(node.ProbeObservation{Kind: "latency", Success: true, DurationMs: 25, CheckedAt: time.Now()})
+	entry1.SetEntryIPs([]string{"198.51.100.1"})
+	entry1.SetAttributes(&node.EgressAttributes{IP: egressIP.String(), Company: "Example Network", Provider: "check-host", SourceURL: "https://api.check-host.cc/myinfo", CheckedAt: time.Now()}, nil)
 	if entry1.LatencyTable == nil {
 		t.Fatal("node latency table should be initialized")
 	}
@@ -228,6 +231,12 @@ func TestBootstrapRestart_RecoversTopologyAndStickyLease(t *testing.T) {
 	}
 	if got := entry2.FailureCount.Load(); got != 2 {
 		t.Fatalf("failure_count: got %d, want %d", got, 2)
+	}
+	if stats := entry2.Diagnostics().Stability; stats.Samples != 1 || stats.Successes != 1 || stats.AverageDurationMs != 25 {
+		t.Fatalf("probe stability did not survive restart: %+v", stats)
+	}
+	if inspection := entry2.Inspection(); len(inspection.EntryIPs) != 1 || inspection.EntryIPs[0] != "198.51.100.1" || inspection.Attributes == nil || inspection.Attributes.Company != "Example Network" {
+		t.Fatalf("entry/exit inspection did not survive restart: %+v", inspection)
 	}
 	if got := entry2.GetEgressIP(); got != egressIP {
 		t.Fatalf("egress_ip: got %s, want %s", got, egressIP)

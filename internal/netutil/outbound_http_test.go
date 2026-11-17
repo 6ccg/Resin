@@ -9,6 +9,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/Resinat/Resin/internal/testutil"
 )
@@ -46,7 +47,7 @@ func TestHTTPGetViaOutbound_AllowNon200(t *testing.T) {
 	if err != nil {
 		t.Fatalf("build outbound: %v", err)
 	}
-	body, _, err := HTTPGetViaOutbound(context.Background(), ob, srv.URL, OutboundHTTPOptions{
+	body, latency, err := HTTPGetViaOutbound(context.Background(), ob, srv.URL, OutboundHTTPOptions{
 		RequireStatusOK: false,
 	})
 	if err != nil {
@@ -54,6 +55,9 @@ func TestHTTPGetViaOutbound_AllowNon200(t *testing.T) {
 	}
 	if string(body) != "probe-body" {
 		t.Fatalf("unexpected body %q", string(body))
+	}
+	if latency <= 0 {
+		t.Fatal("plaintext HTTP did not record a latency sample")
 	}
 }
 
@@ -82,5 +86,33 @@ func TestConnCloseHook_CloseIsIdempotentAndConcurrentSafe(t *testing.T) {
 
 	if got := onCloseCount.Load(); got != 1 {
 		t.Fatalf("onClose called %d times, want 1", got)
+	}
+}
+
+func TestHTTPGetViaOutbound_TargetCheckStopsAtHeadersWithoutFollowingRedirect(t *testing.T) {
+	var followed atomic.Bool
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/redirected" {
+			followed.Store(true)
+			return
+		}
+		w.Header().Set("Location", "/redirected")
+		w.WriteHeader(http.StatusFound)
+		w.(http.Flusher).Flush()
+		<-r.Context().Done() // Body never completes; a reachability check must return.
+	}))
+	defer srv.Close()
+	ob, err := (&testutil.StubOutboundBuilder{}).Build(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	status := 0
+	body, _, err := HTTPGetViaOutbound(ctx, ob, srv.URL, OutboundHTTPOptions{
+		HeadersOnly: true, DisableRedirects: true, OnResponse: func(code int) { status = code },
+	})
+	if err != nil || status != http.StatusFound || len(body) != 0 || followed.Load() {
+		t.Fatalf("incorrect header-only target check: status=%d, body=%q, followed=%v, err=%v", status, body, followed.Load(), err)
 	}
 }
